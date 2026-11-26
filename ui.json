@@ -7,6 +7,18 @@
             "menu": "item",
             "urlKey": "quick-edit",
             "entryPoint": "index.html"
+        },
+        {
+            "label": "Quick-Edit",
+            "menu": "start",
+            "urlKey": "quick-edit-start",
+            "entryPoint": "index.html"
+        },
+        {
+            "label": "Quick-Edit",
+            "menu": "system/item/quick-edit",
+            "urlKey": "quick-edit-setup",
+            "entryPoint": "index.html"
         }
     ]
 }
