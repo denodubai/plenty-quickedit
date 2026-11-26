@@ -141,7 +141,7 @@
     info('Lade Check-Daten (SKUs, Märkte, Eigenschaften, Texte) …');
     const [vars, items] = await Promise.all([
       pages('/rest/items/variations?itemsPerPage=250&with=variationSkus,variationMarkets,variationClients,variationBarcodes,variationCategories,properties,images'),
-      pages('/rest/items?itemsPerPage=250&with=itemTexts')
+      pages('/rest/items?itemsPerPage=250')
     ]);
     const itemMap = {}; items.forEach(i => itemMap[i.id] = i);
     const byId = {}; vars.forEach(v => byId[v.id] = v);
