@@ -3,13 +3,7 @@
     "namespace": "PlentyQuickEdit",
     "menuEntries": [
         {
-            "label": "Quick-Edit",
-            "menu": "Keycoon",
-            "urlKey": "kc-quick-edit",
-            "entryPoint": "index.html"
-        },
-        {
-            "label": "Quick-Edit",
+            "label": "Keycoon",
             "menu": "item",
             "urlKey": "quick-edit",
             "entryPoint": "index.html"
