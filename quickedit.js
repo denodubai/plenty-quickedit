@@ -445,6 +445,6 @@
   let tmr; $('#qe-q').oninput = () => { clearTimeout(tmr); tmr = setTimeout(render, 250); };
   $('#qe-act').onchange = render; $('#qe-stk').onchange = render; $('#qe-gap').onchange = render;
   $('#qe-reload').onclick = () => load().catch(e => info('Fehler: ' + e.message));
-  try { if (/[?&]tab=c\b/.test(location.search)) { TAB = 'c'; setTab('c'); } } catch (e) {}
+  try { if (/[?&]tab=c\b/.test(location.search)) { TAB = 'c'; $('#qe-tp').classList.remove('on'); $('#qe-tc').classList.add('on'); root.querySelector('.only-p').style.display = 'none'; root.querySelector('.only-c').style.display = 'contents'; } } catch (e) {}
   load().catch(e => info('Fehler beim Laden: ' + e.message));
 })();
