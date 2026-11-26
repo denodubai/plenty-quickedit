@@ -73,7 +73,7 @@
 <div id="qe">
  <header>
   <b>Plenty Quick-Edit</b>
-  <div class="tabs"><button id="qe-tp" class="on">Preise</button><button id="qe-tc">Check</button></div>
+  <div class="tabs"><button id="qe-tp" class="on">Preise</button><button id="qe-tc">Eigenschaften</button></div>
   <input type="text" id="qe-q" placeholder="Suche: Nummer, Name … (Komma = mehrere)">
   <label><input type="checkbox" id="qe-act" checked> nur aktive</label>
   <label><input type="checkbox" id="qe-stk"> nur mit Bestand</label>
@@ -176,7 +176,7 @@
     { h: 'Text', tip: 'Artikelbeschreibung DE', f: r => r.c.desc > 80 ? Y('✓', r.c.desc + ' Zeichen') : r.c.desc ? W('!', 'nur ' + r.c.desc + ' Zeichen') : N('keine Beschreibung') },
     { h: 'Bilder', f: r => r.c.imgs ? Y(String(r.c.imgs)) : N('keine Bilder') },
     { h: 'AMZ Typ', tip: 'Amazon-Produkttyp (ohne: kein Preis-/Bestandsexport)', f: r => !has(r, '4.01') ? NA : r.c.ptype ? Y('✓', 'Typ ' + r.c.ptype) : N('Amazon-Produkttyp fehlt') },
-    { h: 'AMZ SKU', tip: 'Amazon-SKU-Zeilen Konto 0–8', f: r => { if (!has(r, '4.01')) return NA; const a = new Set(r.c.skus.filter(s => String(s.marketId) === '4').map(s => +s.accountId)); const miss = [0,1,2,3,4,5,6,7].filter(x => !a.has(x)); return !a.has(0) ? N('Konto 0 (DE) fehlt') : miss.length ? W(a.size + '/9', 'fehlt: Konto ' + miss.join(',')) : Y(a.size + '/9'); } },
+    { h: 'AMZ SKU', tip: 'Amazon-SKU-Zeilen Konto 0–8', f: r => { if (!has(r, '4.01')) return NA; const a = new Set(r.c.skus.filter(s => String(s.marketId) === '4').map(s => +s.accountId)); const miss = [0,1,2,3,4,5,6,7].filter(x => !a.has(x)); return !a.has(0) ? N('Konto 0 (DE) fehlt') : miss.length ? W(a.size + '/9', 'fehlt: Konto ' + miss.join(',')) : Y('✓', 'Konten: ' + [...a].sort().join(',')); } },
     { h: 'WEB-API', tip: 'SKU-Zeile WEB-API (148)', f: r => (!has(r, '4.01') && !has(r, '9')) ? NA : sku(r, '148') ? Y() : N('WEB-API-SKU fehlt', 'webapi') },
     { h: 'Woo', f: r => !has(r, '9') ? NA : sku(r, '9') ? Y('✓', sku(r, '9').parentSku || '') : N('WooCommerce-SKU fehlt') },
     { h: 'KL DE', f: r => klCheck(r, '102.01', false) },
