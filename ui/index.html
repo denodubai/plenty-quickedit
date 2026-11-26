@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="de"><head><meta charset="utf-8"><title>Quick-Edit</title>
+<html lang="de"><head><meta charset="utf-8"><title>Keycoon</title>
 <style>html,body{margin:0;height:100%}</style></head>
 <body>
 <script>
@@ -452,6 +452,7 @@
   let tmr; $('#qe-q').oninput = () => { clearTimeout(tmr); tmr = setTimeout(render, 250); };
   $('#qe-act').onchange = render; $('#qe-stk').onchange = render; $('#qe-gap').onchange = render;
   $('#qe-reload').onclick = () => load().catch(e => info('Fehler: ' + e.message));
+  try { if (/[?&]tab=c\b/.test(location.search)) { TAB = 'c'; setTab('c'); } } catch (e) {}
   load().catch(e => info('Fehler beim Laden: ' + e.message));
 })();
 

@@ -3,10 +3,16 @@
     "namespace": "PlentyQuickEdit",
     "menuEntries": [
         {
-            "label": "Keycoon",
-            "menu": "item",
-            "urlKey": "quick-edit",
-            "entryPoint": "index.html"
+            "label": "Preise bearbeiten",
+            "menu": "item/keycoon",
+            "urlKey": "keycoon-preise",
+            "entryPoint": "index.html?tab=p"
+        },
+        {
+            "label": "Eigenschaften bearbeiten",
+            "menu": "item/keycoon",
+            "urlKey": "keycoon-eigenschaften",
+            "entryPoint": "index.html?tab=c"
         }
     ]
 }

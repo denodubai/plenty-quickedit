@@ -445,5 +445,6 @@
   let tmr; $('#qe-q').oninput = () => { clearTimeout(tmr); tmr = setTimeout(render, 250); };
   $('#qe-act').onchange = render; $('#qe-stk').onchange = render; $('#qe-gap').onchange = render;
   $('#qe-reload').onclick = () => load().catch(e => info('Fehler: ' + e.message));
+  try { if (/[?&]tab=c\b/.test(location.search)) { TAB = 'c'; setTab('c'); } } catch (e) {}
   load().catch(e => info('Fehler beim Laden: ' + e.message));
 })();
