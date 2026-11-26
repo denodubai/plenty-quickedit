@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Quick-Edit</title>
+<style>html,body{margin:0;height:100%}</style></head>
+<body>
+<script>
+/* Plenty Quick-Edit – Prototyp v0.1 (26.11.2026)
+   Läuft im eingeloggten PlentyONE-Tab. Tabelle aller Varianten, Preise direkt in der Zelle ändern.
+   Speichert sofort über die Plenty-REST-API (gleiches Login wie das Backend). */
+(async () => {
+  if (window.__QE) { window.__QE.remove(); }
+  let TOKEN = null; try { TOKEN = localStorage.accessToken; } catch (e) {}
+  if (!TOKEN) { try { TOKEN = window.parent.localStorage.accessToken; } catch (e) {} }
+  if (!TOKEN) { try { TOKEN = window.top.localStorage.accessToken; } catch (e) {} }
+  if (!TOKEN) { alert('Quick-Edit: Bitte zuerst in Plenty einloggen.'); return; }
+  const H = { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' };
+  const api = async (url, opt = {}) => {
+    const r = await fetch(url, { headers: H, ...opt });
+    const t = await r.text();
+    let j; try { j = t ? JSON.parse(t) : {}; } catch (e) { j = { raw: t }; }
+    if (!r.ok) throw new Error(r.status + ' ' + (j.error && j.error.message || t.slice(0, 150)));
+    return j;
+  };
+  const DEFAULT_COLS = ['AMZ DE', 'AMZ DE SALES', 'AMZ DE B2B', 'Kaufland DE', 'Kaufland AT', 'Kaufland CZ',
+    'OTTO', 'OTTO Sales', 'Woocommerce', 'Woocommerce Sale'];
+  const fmt = n => (n === undefined || n === null || n === '') ? '' : Number(n).toFixed(2).replace('.', ',');
+  const parse = s => { s = String(s).trim().replace(/\s/g, '').replace('€', ''); if (s === '') return null;
+    if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.'); const n = Number(s); return isNaN(n) ? NaN : Math.round(n * 100) / 100; };
+
+  /* ---------- UI-Gerüst ---------- */
+  const root = document.createElement('div'); window.__QE = root;
+  root.innerHTML = `
+<style>
+#qe{position:fixed;inset:0;z-index:2147483000;background:#f4f6f8;font:13px/1.3 -apple-system,Segoe UI,Roboto,sans-serif;color:#1d2a33;display:flex;flex-direction:column}
+#qe header{display:flex;gap:8px;align-items:center;padding:8px 12px;background:#062633;color:#fff;flex-wrap:wrap}
+#qe header b{font-size:15px;margin-right:8px}
+#qe header input[type=text]{padding:5px 8px;border-radius:4px;border:0;width:230px}
+#qe header button,#qe .pop button{padding:5px 10px;border:0;border-radius:4px;background:#2e7d9a;color:#fff;cursor:pointer}
+#qe header button.sec{background:#45606d}#qe header button.x{background:#a33}
+#qe header label{display:flex;gap:4px;align-items:center;white-space:nowrap}
+#qe header select,#qe header .num{padding:4px;border-radius:4px;border:0}
+#qe .num{width:70px}
+#qe .wrap{flex:1;overflow:auto}
+#qe table{border-collapse:separate;border-spacing:0;background:#fff;min-width:100%}
+#qe th{position:sticky;top:0;background:#dfe6ea;z-index:2;padding:6px;border-bottom:1px solid #b9c4ca;text-align:left;white-space:nowrap;cursor:pointer;user-select:none}
+#qe td{border-bottom:1px solid #e6ebee;padding:0 4px;white-space:nowrap;height:26px}
+#qe td.n{max-width:330px;overflow:hidden;text-overflow:ellipsis}
+#qe tr:hover td{background:#f3f9fc}#qe tr.sel td{background:#e3f1ff}
+#qe td.p{padding:0;border-left:1px solid #eef2f4}
+#qe td.p input{width:78px;border:0;padding:4px 6px;text-align:right;font:inherit;background:transparent;height:25px;box-sizing:border-box}
+#qe td.p input:focus{outline:2px solid #2e7d9a;background:#fff}
+#qe .saving{background:#fff6c7!important}#qe .ok{background:#d9f5df!important}#qe .err{background:#ffd6d6!important}
+#qe .warn{box-shadow:inset 0 0 0 2px #f39c12}
+#qe .inact td{color:#999}
+#qe footer{padding:5px 12px;background:#dfe6ea;display:flex;gap:16px;font-size:12px}
+#qe .pop{position:absolute;top:46px;right:12px;background:#fff;border:1px solid #b9c4ca;border-radius:6px;padding:10px;max-height:70vh;overflow:auto;z-index:5;box-shadow:0 4px 18px rgba(0,0,0,.2);columns:2;width:460px}
+#qe .pop label{display:block;break-inside:avoid;padding:2px 0}
+#qe .log{position:absolute;bottom:30px;right:12px;width:430px;max-height:45vh;overflow:auto;background:#fff;border:1px solid #b9c4ca;border-radius:6px;padding:8px;font-size:12px;z-index:5;box-shadow:0 4px 18px rgba(0,0,0,.2)}
+</style>
+<div id="qe">
+ <header>
+  <b>Plenty Quick-Edit</b>
+  <input type="text" id="qe-q" placeholder="Suche: Nummer, Name …  (mehrere mit Komma)">
+  <label><input type="checkbox" id="qe-act" checked> nur aktive</label>
+  <label><input type="checkbox" id="qe-stk"> nur mit Bestand</label>
+  <button class="sec" id="qe-cols">Spalten</button>
+  <span style="margin-left:10px">Markierte:</span>
+  <select id="qe-bcol"></select>
+  <select id="qe-bop"><option value="add">± €</option><option value="pct">± %</option><option value="set">= €</option></select>
+  <input class="num" id="qe-bval" placeholder="-0,10">
+  <button id="qe-bgo">Anwenden</button>
+  <button class="sec" id="qe-undo">↶ Rückgängig</button>
+  <button class="sec" id="qe-logb">Protokoll</button>
+  <button class="sec" id="qe-reload">Neu laden</button>
+  <button class="x" id="qe-close">✕</button>
+ </header>
+ <div class="wrap"><table><thead></thead><tbody></tbody></table></div>
+ <footer><span id="qe-info">Lade …</span><span id="qe-stat"></span><span style="margin-left:auto;color:#666">Enter = speichern + nächste Zeile · Esc = verwerfen · orange = Angebot ≥ Normalpreis</span></footer>
+</div>`;
+  document.body.appendChild(root);
+  const $ = s => root.querySelector(s);
+  const info = t => $('#qe-info').textContent = t;
+  const stat = t => $('#qe-stat').textContent = t;
+  $('#qe-close').style.display = 'none';
+
+  /* ---------- Daten laden ---------- */
+  let PRICES = [], ROWS = [], COLS = [], LOG = [], sortKey = 'number', sortDir = 1;
+  async function load() {
+    info('Lade Verkaufspreise …');
+    const sp = await api('/rest/items/sales_prices?itemsPerPage=250&with=names');
+    PRICES = (sp.entries || sp).map(p => {
+      const n = (p.names || []).find(x => x.lang === 'de') || (p.names || [])[0] || {};
+      return { id: p.id, name: n.nameInternal || n.nameExternal || ('Preis ' + p.id) };
+    }).sort((a, b) => a.name.localeCompare(b.name));
+    let saved = null; try { saved = JSON.parse(localStorage.qeCols || 'null'); } catch (e) {}
+    COLS = saved && saved.length ? saved.filter(id => PRICES.some(p => p.id === id))
+      : DEFAULT_COLS.map(n => (PRICES.find(p => p.name.toLowerCase() === n.toLowerCase()) || {}).id).filter(Boolean);
+    info('Lade Varianten …');
+    const first = await api('/rest/items/variations?itemsPerPage=250&page=1&with=variationSalesPrices,stock');
+    const pages = [first];
+    const rest = []; for (let p = 2; p <= (first.lastPageNumber || 1); p++)
+      rest.push(api('/rest/items/variations?itemsPerPage=250&page=' + p + '&with=variationSalesPrices,stock'));
+    pages.push(...await Promise.all(rest));
+    ROWS = pages.flatMap(p => p.entries || []).map(v => {
+      const pr = {}; (v.variationSalesPrices || []).forEach(x => pr[x.salesPriceId] = x.price);
+      const stock = (v.stock || []).filter(s => s.variationId === v.id).reduce((a, s) => a + (s.netStock || 0), 0);
+      return { id: v.id, itemId: v.itemId, number: v.number || '', name: v.name || '', active: v.isActive, isMain: v.isMain, stock, pr };
+    });
+    // Namen der Hauptvariante an Kinder ohne Namen vererben
+    const mainName = {}; ROWS.forEach(r => { if (r.isMain && r.name) mainName[r.itemId] = r.name; });
+    ROWS.forEach(r => { if (!r.name) r.name = mainName[r.itemId] || ''; });
+    buildBulkSelect(); render();
+  }
+
+  /* ---------- Darstellung ---------- */
+  const priceName = id => (PRICES.find(p => p.id === id) || {}).name || id;
+  // Paare Normal/Angebot erkennen: "X" + "X Sales|SALES|Sale"
+  function pairOf(id) {
+    const n = priceName(id); const m = n.match(/^(.*?)\s+(sales?|angebot)$/i);
+    if (!m) return null; const base = PRICES.find(p => p.name.toLowerCase() === m[1].toLowerCase());
+    return base ? base.id : null;
+  }
+  function visibleRows() {
+    const qs = $('#qe-q').value.toLowerCase().split(',').map(s => s.trim()).filter(Boolean);
+    const act = $('#qe-act').checked, stk = $('#qe-stk').checked;
+    return ROWS.filter(r => (!act || r.active) && (!stk || r.stock > 0) &&
+      (!qs.length || qs.some(q => (r.number + ' ' + r.name + ' ' + r.id).toLowerCase().includes(q))))
+      .sort((a, b) => {
+        const va = sortKey.startsWith('p') ? (a.pr[+sortKey.slice(1)] ?? -1) : a[sortKey];
+        const vb = sortKey.startsWith('p') ? (b.pr[+sortKey.slice(1)] ?? -1) : b[sortKey];
+        return (va > vb ? 1 : va < vb ? -1 : 0) * sortDir;
+      });
+  }
+  function render() {
+    const th = [`<th><input type="checkbox" id="qe-all"></th>`, `<th data-k="number">Nummer</th>`, `<th data-k="name">Name</th>`, `<th data-k="stock">Bestand</th>`]
+      .concat(COLS.map(id => `<th data-k="p${id}">${priceName(id)}</th>`));
+    $('thead').innerHTML = '<tr>' + th.join('') + '</tr>';
+    const rows = visibleRows();
+    $('tbody').innerHTML = rows.map(r => `<tr data-id="${r.id}" class="${r.active ? '' : 'inact'}">
+      <td><input type="checkbox" class="qe-sel"></td><td>${r.number}</td><td class="n" title="${(r.name || '').replace(/"/g, '&quot;')}">${r.name}</td><td style="text-align:right">${r.stock}</td>` +
+      COLS.map(id => `<td class="p"><input data-sp="${id}" value="${fmt(r.pr[id])}"></td>`).join('') + '</tr>').join('');
+    root.querySelectorAll('th[data-k]').forEach(h => h.onclick = () => { const k = h.dataset.k; sortDir = sortKey === k ? -sortDir : 1; sortKey = k; render(); });
+    $('#qe-all').onchange = e => root.querySelectorAll('.qe-sel').forEach(c => { c.checked = e.target.checked; c.closest('tr').classList.toggle('sel', c.checked); });
+    root.querySelectorAll('.qe-sel').forEach(c => c.onchange = () => c.closest('tr').classList.toggle('sel', c.checked));
+    root.querySelectorAll('td.p input').forEach(inp => wireCell(inp));
+    rows.forEach(r => markWarn(r));
+    info(rows.length + ' von ' + ROWS.length + ' Varianten');
+  }
+  function markWarn(r) {
+    const tr = root.querySelector(`tr[data-id="${r.id}"]`); if (!tr) return;
+    COLS.forEach(id => {
+      const base = pairOf(id); const inp = tr.querySelector(`input[data-sp="${id}"]`); if (!inp) return;
+      inp.parentElement.classList.toggle('warn', !!(base && r.pr[id] != null && r.pr[base] != null && r.pr[id] >= r.pr[base]));
+    });
+  }
+
+  /* ---------- Speichern ---------- */
+  async function savePrice(r, spId, newVal, logIt = true) {
+    const old = r.pr[spId]; if (old === newVal || (old == null && newVal == null)) return 'same';
+    const base = `/rest/items/${r.itemId}/variations/${r.id}/variation_sales_prices`;
+    if (newVal == null) await api(`${base}/${spId}`, { method: 'DELETE' });
+    else if (old == null) await api(base, { method: 'POST', body: JSON.stringify({ salesPriceId: spId, price: newVal }) });
+    else await api(`${base}/${spId}`, { method: 'PUT', body: JSON.stringify({ price: newVal }) });
+    if (newVal == null) delete r.pr[spId]; else r.pr[spId] = newVal;
+    if (logIt) LOG.push({ t: new Date().toLocaleTimeString(), r, spId, old, val: newVal });
+    markWarn(r); return 'ok';
+  }
+  function cellFor(r, spId) { return root.querySelector(`tr[data-id="${r.id}"] input[data-sp="${spId}"]`); }
+  async function saveWithUi(r, spId, val, logIt) {
+    const inp = cellFor(r, spId); const td = inp && inp.parentElement;
+    td && (td.className = 'p saving');
+    try { const res = await savePrice(r, spId, val, logIt); if (inp) inp.value = fmt(r.pr[spId]);
+      td && (td.className = 'p ' + (res === 'ok' ? 'ok' : '')); markWarn(r);
+      stat(res === 'ok' ? `✔ ${r.number} · ${priceName(spId)} = ${fmt(val) || 'leer'}` : '');
+      return true;
+    } catch (e) { td && (td.className = 'p err'); td && (td.title = e.message); stat('✖ ' + r.number + ': ' + e.message); return false; }
+  }
+  function wireCell(inp) {
+    const tr = inp.closest('tr'); const r = ROWS.find(x => x.id == tr.dataset.id); const spId = +inp.dataset.sp;
+    const commit = async () => {
+      const v = parse(inp.value);
+      if (Number.isNaN(v)) { inp.parentElement.className = 'p err'; stat('✖ keine gültige Zahl: ' + inp.value); return; }
+      if (v === (r.pr[spId] ?? null)) { inp.value = fmt(r.pr[spId]); return; }
+      await saveWithUi(r, spId, v, true);
+    };
+    inp.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { inp.value = fmt(r.pr[spId]); inp.blur(); }
+      if (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault(); const dir = e.key === 'ArrowUp' ? 'previousElementSibling' : 'nextElementSibling';
+        const nxt = tr[dir] && tr[dir].querySelector(`input[data-sp="${spId}"]`); if (nxt) { nxt.focus(); nxt.select(); } else inp.blur();
+      }
+    });
+    inp.addEventListener('focus', () => inp.select());
+    inp.addEventListener('change', commit);
+  }
+
+  /* ---------- Massenänderung ---------- */
+  function buildBulkSelect() { $('#qe-bcol').innerHTML = COLS.map(id => `<option value="${id}">${priceName(id)}</option>`).join(''); }
+  $('#qe-bgo').onclick = async () => {
+    const spId = +$('#qe-bcol').value, op = $('#qe-bop').value, val = parse($('#qe-bval').value);
+    const sel = [...root.querySelectorAll('.qe-sel:checked')].map(c => ROWS.find(x => x.id == c.closest('tr').dataset.id));
+    if (!sel.length) return alert('Erst Zeilen links anhaken.');
+    if (val == null || Number.isNaN(val)) return alert('Wert eingeben, z. B. -0,10');
+    const plan = sel.map(r => { const o = r.pr[spId]; if (o == null && op !== 'set') return null;
+      const n = op === 'set' ? val : op === 'add' ? o + val : o * (1 + val / 100); return { r, n: Math.round(n * 100) / 100 }; }).filter(Boolean);
+    if (!confirm(`${priceName(spId)}: ${plan.length} Preise ändern?\nBeispiel: ${plan[0].r.number}  ${fmt(plan[0].r.pr[spId])} → ${fmt(plan[0].n)}`)) return;
+    const batch = []; let ok = 0;
+    for (const p of plan) { const old = p.r.pr[spId]; if (await saveWithUi(p.r, spId, p.n, false)) { ok++; batch.push({ r: p.r, spId, old, val: p.n }); } }
+    LOG.push({ t: new Date().toLocaleTimeString(), batch }); stat(`✔ ${ok}/${plan.length} gespeichert`);
+  };
+
+  /* ---------- Rückgängig / Protokoll ---------- */
+  $('#qe-undo').onclick = async () => {
+    const last = LOG.pop(); if (!last) return stat('Nichts rückgängig zu machen');
+    const list = last.batch || [last]; let ok = 0;
+    for (const e of list) if (await saveWithUi(e.r, e.spId, e.old ?? null, false)) ok++;
+    stat(`↶ ${ok} Änderung(en) zurückgesetzt`);
+  };
+  $('#qe-logb').onclick = () => {
+    const ex = root.querySelector('.log'); if (ex) return ex.remove();
+    const d = document.createElement('div'); d.className = 'log';
+    const lines = LOG.flatMap(e => (e.batch || [e]).map(x => `${e.t}  ${x.r.number}  ${priceName(x.spId)}: ${fmt(x.old) || '–'} → ${fmt(x.val) || '–'}`));
+    d.innerHTML = '<b>Änderungen dieser Sitzung</b><br>' + (lines.length ? lines.reverse().join('<br>') : 'noch keine');
+    root.querySelector('#qe').appendChild(d);
+  };
+
+  /* ---------- Spaltenauswahl ---------- */
+  $('#qe-cols').onclick = () => {
+    const ex = root.querySelector('.pop'); if (ex) return ex.remove();
+    const d = document.createElement('div'); d.className = 'pop';
+    d.innerHTML = PRICES.map(p => `<label><input type="checkbox" value="${p.id}" ${COLS.includes(p.id) ? 'checked' : ''}> ${p.name}</label>`).join('') +
+      '<div style="column-span:all;margin-top:8px"><button id="qe-colok">Übernehmen</button></div>';
+    root.querySelector('#qe').appendChild(d);
+    d.querySelector('#qe-colok').onclick = () => {
+      const chosen = [...d.querySelectorAll('input:checked')].map(i => +i.value);
+      COLS = PRICES.filter(p => chosen.includes(p.id)).map(p => p.id); // Reihenfolge alphabetisch
+      localStorage.qeCols = JSON.stringify(COLS); d.remove(); buildBulkSelect(); render();
+    };
+  };
+
+  let tmr; $('#qe-q').oninput = () => { clearTimeout(tmr); tmr = setTimeout(render, 250); };
+  $('#qe-act').onchange = render; $('#qe-stk').onchange = render;
+  $('#qe-reload').onclick = () => load().catch(e => info('Fehler: ' + e.message));
+  load().catch(e => info('Fehler beim Laden: ' + e.message));
+})();
+
+</script>
+</body></html>

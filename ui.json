@@ -1,0 +1,12 @@
+{
+    "defaultEntryPoint": "index.html",
+    "namespace": "PlentyQuickEdit",
+    "menuEntries": [
+        {
+            "label": "Quick-Edit",
+            "menu": "item",
+            "urlKey": "quick-edit",
+            "entryPoint": "index.html"
+        }
+    ]
+}
