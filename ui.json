@@ -4,6 +4,12 @@
     "menuEntries": [
         {
             "label": "Quick-Edit",
+            "menu": "keycoon",
+            "urlKey": "kc-quick-edit",
+            "entryPoint": "index.html"
+        },
+        {
+            "label": "Quick-Edit",
             "menu": "item",
             "urlKey": "quick-edit",
             "entryPoint": "index.html"
