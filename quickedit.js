@@ -1,0 +1,449 @@
+/* Plenty Quick-Edit – Prototyp v0.4 (26.11.2026)
+   Reiter „Preise“: alle Varianten, Preise direkt in der Zelle ändern.
+   Reiter „Check“: Vollständigkeit je Variante (Mandant, EAN, Kategorie, Beschreibung, Produkttyp,
+   SKU-Zeilen je Kanal, Kaufland-Status/Unit, Otto-/Kaufland-Kategorie, Angebotsdaten).
+   Läuft im eingeloggten PlentyONE (Lesezeichen oder Plugin). Speichert direkt über die Plenty-REST-API. */
+(async () => {
+  if (window.__QE) { window.__QE.remove(); }
+  const TOKEN = localStorage.accessToken;
+  if (!TOKEN) { alert('Quick-Edit: Bitte zuerst in Plenty einloggen.'); return; }
+  const H = { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' };
+  const api = async (url, opt = {}) => {
+    const r = await fetch(url, { headers: H, ...opt });
+    const t = await r.text();
+    let j; try { j = t ? JSON.parse(t) : {}; } catch (e) { j = { raw: t }; }
+    if (!r.ok) throw new Error(r.status + ' ' + (j.error && j.error.message || t.slice(0, 150)));
+    return j;
+  };
+  const CLIENT_ID = 67841;               // Mandant FireMat.de
+    const fmt = n => (n === undefined || n === null || n === '') ? '' : Number(n).toFixed(2).replace('.', ',');
+  const parse = s => { s = String(s).trim().replace(/\s/g, '').replace('€', ''); if (s === '') return null;
+    if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.'); const n = Number(s); return isNaN(n) ? NaN : Math.round(n * 100) / 100; };
+  const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+
+  /* ---------- UI-Gerüst ---------- */
+  const root = document.createElement('div'); window.__QE = root;
+  root.innerHTML = `
+<style>
+#qe{position:fixed;inset:0;z-index:2147483000;background:#f4f6f8;font:13px/1.3 -apple-system,Segoe UI,Roboto,sans-serif;color:#1d2a33;display:flex;flex-direction:column}
+#qe header{display:flex;gap:8px;align-items:center;padding:8px 12px;background:#062633;color:#fff;flex-wrap:wrap}
+#qe header b{font-size:15px;margin-right:4px}
+#qe .tabs{display:flex;gap:2px;margin-right:10px}
+#qe .tabs button{background:#24475a!important;border-radius:4px 4px 0 0!important;padding:6px 14px!important}
+#qe .tabs button.on{background:#f4f6f8!important;color:#062633!important;font-weight:700}
+#qe header input[type=text]{padding:5px 8px;border-radius:4px;border:0;width:210px}
+#qe header button,#qe .pop button{padding:5px 10px;border:0;border-radius:4px;background:#2e7d9a;color:#fff;cursor:pointer}
+#qe header button.sec{background:#45606d}#qe header button.x{background:#a33}
+#qe header label{display:flex;gap:4px;align-items:center;white-space:nowrap}
+#qe header select,#qe header .num{padding:4px;border-radius:4px;border:0}
+#qe .num{width:70px}
+#qe .only-p,#qe .only-c{display:contents}
+#qe .wrap{flex:1;overflow:auto}
+#qe table{border-collapse:separate;border-spacing:0;background:#fff;min-width:100%}
+#qe th{position:sticky;top:0;background:#dfe6ea;z-index:2;padding:6px;border-bottom:1px solid #b9c4ca;text-align:left;white-space:nowrap;cursor:pointer;user-select:none}
+#qe th small{display:block;font-weight:400;color:#a33}
+#qe td{border-bottom:1px solid #e6ebee;padding:0 4px;white-space:nowrap;height:26px}
+#qe tr>*:nth-child(1),#qe tr>*:nth-child(2),#qe tr>*:nth-child(3){position:sticky;background:#fff;z-index:1}
+#qe tr>*:nth-child(1){left:0;width:22px}#qe tr>*:nth-child(2){left:30px}#qe tr>*:nth-child(3){left:110px;box-shadow:2px 0 0 #dfe6ea}
+#qe th:nth-child(-n+3){z-index:3;background:#dfe6ea}#qe td:nth-child(2){min-width:72px}
+#qe td.n{max-width:260px;overflow:hidden;text-overflow:ellipsis}
+#qe tr:hover td{background:#f3f9fc}#qe tr.sel td{background:#e3f1ff}
+#qe td.p{padding:0;border-left:1px solid #eef2f4}
+#qe td.p input{width:78px;border:0;padding:4px 6px;text-align:right;font:inherit;background:transparent;height:25px;box-sizing:border-box}
+#qe td.p input[type=date]{width:128px;text-align:left}
+#qe td.p input:focus{outline:2px solid #2e7d9a;background:#fff}
+#qe td.c{text-align:center;border-left:1px solid #eef2f4;min-width:46px}
+#qe td.c.y{color:#1e8e3e}#qe td.c.no{background:#ffe1e1;color:#b00020;font-weight:700}#qe td.c.wa{background:#fff1d6;color:#9a5b00}
+#qe td.c.na{color:#c5ccd0}#qe td.c.fix{cursor:pointer;text-decoration:underline dotted}
+#qe .saving{background:#fff6c7!important}#qe .ok{background:#d9f5df!important}#qe .err{background:#ffd6d6!important}
+#qe .warn{box-shadow:inset 0 0 0 2px #f39c12}
+#qe .inact td{color:#999}
+#qe #qe-stat{font-weight:600}#qe footer{padding:5px 12px;background:#dfe6ea;display:flex;gap:16px;font-size:12px}
+#qe .pop{position:absolute;top:46px;right:12px;background:#fff;border:1px solid #b9c4ca;border-radius:6px;padding:10px;max-height:70vh;overflow:auto;z-index:5;box-shadow:0 4px 18px rgba(0,0,0,.2);columns:2;width:460px}
+#qe .pop label{display:block;break-inside:avoid;padding:2px 0}
+#qe .log{position:absolute;bottom:30px;right:12px;width:430px;max-height:45vh;overflow:auto;background:#fff;border:1px solid #b9c4ca;border-radius:6px;padding:8px;font-size:12px;z-index:5;box-shadow:0 4px 18px rgba(0,0,0,.2)}
+</style>
+<div id="qe">
+ <header>
+  <b>Plenty Quick-Edit</b>
+  <div class="tabs"><button id="qe-tp" class="on">Preise</button><button id="qe-tc">Check</button></div>
+  <input type="text" id="qe-q" placeholder="Suche: Nummer, Name … (Komma = mehrere)">
+  <label><input type="checkbox" id="qe-act" checked> nur aktive</label>
+  <label><input type="checkbox" id="qe-stk"> nur mit Bestand</label>
+  <span class="only-c" style="display:none"><label><input type="checkbox" id="qe-gap"> nur mit Lücken</label></span>
+  <span class="only-p">
+   <button class="sec" id="qe-cols">Spalten</button>
+   <span style="margin-left:6px">Markierte:</span>
+   <select id="qe-bcol"></select>
+   <select id="qe-bop"><option value="add">± €</option><option value="pct">± %</option><option value="set">= €</option></select>
+   <input class="num" id="qe-bval" placeholder="-0,10">
+   <button id="qe-bgo">Anwenden</button>
+  </span>
+  <button class="sec" id="qe-undo">↶ Rückgängig</button>
+  <button class="sec" id="qe-logb">Protokoll</button>
+  <button class="sec" id="qe-reload">Neu laden</button>
+  <button class="x" id="qe-close">✕</button>
+ </header>
+ <div class="wrap"><table><thead></thead><tbody></tbody></table></div>
+ <footer><span id="qe-info">Lade …</span><span id="qe-stat"></span><span id="qe-help" style="margin-left:auto;color:#666"></span></footer>
+</div>`;
+  document.body.appendChild(root);
+  const $ = s => root.querySelector(s);
+  const info = t => $('#qe-info').textContent = t;
+  const stat = t => $('#qe-stat').textContent = t;
+  $('#qe-close').onclick = () => root.remove();
+  const HELP_P = 'Bestand ✎ = Bestandskorrektur im Hauptlager · Enter = speichern + nächste Zeile · Esc = verwerfen · orange = OTTO Sales ≥ OTTO (kein Angebot)';
+  const HELP_C = '✓ ok · ✗ fehlt · ! prüfen · – Kanal nicht aktiv · unterstrichen = per Klick ergänzen · Datum direkt änderbar';
+
+  /* ---------- Daten ---------- */
+  let PRICES = [], ROWS = [], COLS = [], LOG = [], sortKey = 'number', sortDir = 1, TAB = 'p', CHECK_LOADED = false;
+  async function pages(base) {
+    const first = await api(base + '&page=1');
+    const rest = []; for (let p = 2; p <= (first.lastPageNumber || 1); p++) rest.push(api(base + '&page=' + p));
+    return [first, ...await Promise.all(rest)].flatMap(p => p.entries || []);
+  }
+  async function load() {
+    info('Lade Verkaufspreise …');
+    const sp = await api('/rest/items/sales_prices?itemsPerPage=250&with=names');
+    PRICES = (sp.entries || sp).map(p => {
+      const n = (p.names || []).find(x => x.lang === 'de') || (p.names || [])[0] || {};
+      return { id: p.id, name: n.nameInternal || n.nameExternal || ('Preis ' + p.id) };
+    }).sort((a, b) => a.name.localeCompare(b.name));
+    // Standardpreis (kleinste ID = Plenty-Hauptpreis) zuerst, danach alphabetisch
+    const minId = Math.min(...PRICES.map(p => p.id)); PRICES.sort((a, b) => (a.id === minId ? -1 : b.id === minId ? 1 : a.name.localeCompare(b.name)));
+    let saved = null; try { saved = JSON.parse(localStorage.qeCols2 || 'null'); } catch (e) {}
+    COLS = saved && saved.length ? saved.filter(id => PRICES.some(p => p.id === id)) : PRICES.map(p => p.id);  // Standard: alle Preise
+    info('Lade Varianten …');
+    const vars = await pages('/rest/items/variations?itemsPerPage=250&with=variationSalesPrices,stock');
+    ROWS = vars.map(v => {
+      const pr = {}; (v.variationSalesPrices || []).forEach(x => pr[x.salesPriceId] = x.price);
+      const st = (v.stock || []).filter(s => s.variationId === v.id);
+      const stock = st.reduce((a, s) => a + (s.netStock || 0), 0);
+      const wh = v.mainWarehouseId || (st[0] || {}).warehouseId || null;
+      const phys = (st.find(s => s.warehouseId === wh) || {}).physicalStock ?? 0;
+      return { id: v.id, itemId: v.itemId, number: v.number || '', name: v.name || '', active: v.isActive, isMain: v.isMain, position: v.position,
+        stock, phys, wh, ek: v.purchasePrice, pr };
+    });
+    const mainName = {}; ROWS.forEach(r => { if (r.isMain && r.name) mainName[r.itemId] = r.name; });
+    ROWS.forEach(r => { if (!r.name) r.name = mainName[r.itemId] || ''; });
+    CHECK_LOADED = false;
+    buildBulkSelect();
+    if (TAB === 'c') await loadCheck(); else render();
+  }
+  async function loadCheck() {
+    info('Lade Check-Daten (SKUs, Märkte, Eigenschaften, Texte) …');
+    const [vars, items] = await Promise.all([
+      pages('/rest/items/variations?itemsPerPage=250&with=variationSkus,variationMarkets,variationClients,variationBarcodes,variationCategories,properties,images'),
+      pages('/rest/items?itemsPerPage=250&with=itemTexts')
+    ]);
+    const itemMap = {}; items.forEach(i => itemMap[i.id] = i);
+    const byId = {}; vars.forEach(v => byId[v.id] = v);
+    ROWS.forEach(r => {
+      const v = byId[r.id] || {}; const it = itemMap[r.itemId] || {};
+      const txt = (it.texts || it.itemTexts || []).find(t => t.lang === 'de') || {};
+      const props = {}; (v.properties || []).forEach(p => props[p.propertyId] = { rel: p, val: ((p.relationValues || [])[0] || {}).value, valId: ((p.relationValues || [])[0] || {}).id, lang: ((p.relationValues || [])[0] || {}).lang });
+      r.c = {
+        markets: new Set((v.variationMarkets || []).map(m => String(m.marketId))),
+        skus: v.variationSkus || [],
+        clients: (v.variationClients || []).map(c => c.plentyId),
+        ean: (v.variationBarcodes || []).map(b => b.code).filter(Boolean),
+        cats: (v.variationCategories || []).length,
+        imgs: (v.images || []).length,
+        desc: (txt.description || '').replace(/<[^>]+>/g, '').trim().length,
+        ptype: it.amazonProductType || null,
+        props
+      };
+    });
+    CHECK_LOADED = true; render();
+  }
+
+  /* ---------- Check-Regeln ---------- */
+  const sku = (r, m, acc) => r.c.skus.find(s => String(s.marketId) === m && (acc === undefined || s.accountId == acc));
+  const has = (r, m) => r.c.markets.has(m);
+  const Y = (t = '✓', tip = '') => ({ k: 'y', t, tip }), N = (tip, fix) => ({ k: 'no', t: '✗', tip, fix }), W = (t, tip) => ({ k: 'wa', t, tip }), NA = { k: 'na', t: '–', tip: 'Kanal nicht aktiv' };
+  const dateVal = (r, pid) => { const p = r.c.props[pid]; return p && p.val ? String(p.val).slice(0, 10) : ''; };
+  const CHECKS = [
+    { h: 'Mandant', tip: 'Mandant FireMat.de (ohne kein Amazon-/Woo-Export)', f: r => r.c.clients.includes(CLIENT_ID) ? Y() : N('Mandant FireMat.de fehlt', 'client') },
+    { h: 'EAN', f: r => r.c.ean.length ? Y('✓', r.c.ean.join(', ')) : N('keine EAN/GTIN') },
+    { h: 'Kategorie', f: r => r.c.cats ? Y('✓', r.c.cats + ' Kategorie(n)') : N('keine Kategorie') },
+    { h: 'Text', tip: 'Artikelbeschreibung DE', f: r => r.c.desc > 80 ? Y('✓', r.c.desc + ' Zeichen') : r.c.desc ? W('!', 'nur ' + r.c.desc + ' Zeichen') : N('keine Beschreibung') },
+    { h: 'Bilder', f: r => r.c.imgs ? Y(String(r.c.imgs)) : N('keine Bilder') },
+    { h: 'AMZ Typ', tip: 'Amazon-Produkttyp (ohne: kein Preis-/Bestandsexport)', f: r => !has(r, '4.01') ? NA : r.c.ptype ? Y('✓', 'Typ ' + r.c.ptype) : N('Amazon-Produkttyp fehlt') },
+    { h: 'AMZ SKU', tip: 'Amazon-SKU-Zeilen Konto 0–8', f: r => { if (!has(r, '4.01')) return NA; const a = new Set(r.c.skus.filter(s => String(s.marketId) === '4').map(s => +s.accountId)); const miss = [0,1,2,3,4,5,6,7].filter(x => !a.has(x)); return !a.has(0) ? N('Konto 0 (DE) fehlt') : miss.length ? W(a.size + '/9', 'fehlt: Konto ' + miss.join(',')) : Y(a.size + '/9'); } },
+    { h: 'WEB-API', tip: 'SKU-Zeile WEB-API (148)', f: r => (!has(r, '4.01') && !has(r, '9')) ? NA : sku(r, '148') ? Y() : N('WEB-API-SKU fehlt', 'webapi') },
+    { h: 'Woo', f: r => !has(r, '9') ? NA : sku(r, '9') ? Y('✓', sku(r, '9').parentSku || '') : N('WooCommerce-SKU fehlt') },
+    { h: 'KL DE', f: r => klCheck(r, '102.01', false) },
+    { h: 'KL AT', f: r => klCheck(r, '102.05', true, 37) },
+    { h: 'KL CZ', f: r => klCheck(r, '102.02', true, 43) },
+    { h: 'Otto', tip: 'Otto-SKU (160.1), Parent-SKU, Kategoriegruppe', f: r => { if (!has(r, '160.1')) return NA; const s = sku(r, '160.1'); if (!s) return N('Otto-SKU fehlt'); if (!r.c.props[16]) return N('OTTO Kategoriegruppe fehlt → in keinem Otto-Katalog'); return s.parentSku ? Y('✓', 'Parent: ' + s.parentSku) : W('!', 'Parent-SKU leer'); } },
+    { h: 'Otto Start', date: 35, cond: r => has(r, '160.1') },
+    { h: 'AMZ Start', date: 12, cond: r => has(r, '4.01') },
+    { h: 'Ende', date: 13, cond: r => has(r, '160.1') || has(r, '4.01') }
+  ];
+  function klCheck(r, m, needUnit, catProp) {
+    if (!has(r, m)) return NA; const s = sku(r, m);
+    if (!s) return N('Kaufland-SKU fehlt');
+    if (catProp && !r.c.props[catProp]) return N('Kaufland-Kategorie-Eigenschaft fehlt → in keinem Länderkatalog');
+    if (s.status !== 'ACTIVE') return W('!', 'SKU ' + s.sku + ' INACTIVE (Plenty überspringt)');
+    if (needUnit && !s.additionalInformation) return W('!', 'SKU ' + s.sku + ' ohne Kaufland-Unit-ID');
+    return Y('✓', s.sku + (s.additionalInformation ? ' / ' + s.additionalInformation : ''));
+  }
+  const evalRow = r => CHECKS.map(c => c.date ? (c.cond(r) ? { date: c.date, v: dateVal(r, c.date) } : NA) : c.f(r));
+  const rowHasGap = cells => cells.some(x => x.k === 'no' || x.k === 'wa' || (x.date && !x.v));
+
+  /* ---------- Darstellung ---------- */
+  const priceName = id => (PRICES.find(p => p.id === id) || {}).name || id;
+  function pairOf(id) {
+    const n = priceName(id); const m = n.match(/^(.*?)\s+(sales?|angebot)$/i);
+    if (!m) return null; const base = PRICES.find(p => p.name.toLowerCase() === m[1].toLowerCase());
+    return base ? base.id : null;
+  }
+  function visibleRows() {
+    const qs = $('#qe-q').value.toLowerCase().split(',').map(s => s.trim()).filter(Boolean);
+    const act = $('#qe-act').checked, stk = $('#qe-stk').checked, gap = TAB === 'c' && $('#qe-gap').checked;
+    return ROWS.filter(r => (!act || r.active) && (!stk || r.stock > 0) &&
+      (!qs.length || qs.some(q => (r.number + ' ' + r.name + ' ' + r.id).toLowerCase().includes(q))) &&
+      (!gap || (r.c && rowHasGap(evalRow(r)))))
+      .sort((a, b) => {
+        const va = sortKey.startsWith('p') ? (a.pr[+sortKey.slice(1)] ?? -1) : a[sortKey];
+        const vb = sortKey.startsWith('p') ? (b.pr[+sortKey.slice(1)] ?? -1) : b[sortKey];
+        return (va > vb ? 1 : va < vb ? -1 : 0) * sortDir;
+      });
+  }
+  function render() { TAB === 'c' ? renderCheck() : renderPrices(); }
+  function baseCells(r) {
+    return `<td><input type="checkbox" class="qe-sel"></td><td>${esc(r.number)}</td><td class="n" title="${esc(r.name)}">${esc(r.name)}</td><td style="text-align:right">${r.stock}</td>`;
+  }
+  function wireCommon() {
+    root.querySelectorAll('th[data-k]').forEach(h => h.onclick = () => { const k = h.dataset.k; sortDir = sortKey === k ? -sortDir : 1; sortKey = k; render(); });
+    const all = $('#qe-all'); if (all) all.onchange = e => root.querySelectorAll('.qe-sel').forEach(c => { c.checked = e.target.checked; c.closest('tr').classList.toggle('sel', c.checked); });
+    root.querySelectorAll('.qe-sel').forEach(c => c.onchange = () => c.closest('tr').classList.toggle('sel', c.checked));
+  }
+  const HEAD_P = `<th><input type="checkbox" id="qe-all"></th><th data-k="number">Nummer</th><th data-k="name">Name</th><th data-k="phys" title="physischer Bestand im Hauptlager – ändern = Bestandskorrektur">Bestand ✎</th><th data-k="ek">EK</th>`;
+  const HEAD = `<th><input type="checkbox" id="qe-all"></th><th data-k="number">Nummer</th><th data-k="name">Name</th><th data-k="stock">Bestand</th>`;
+  function renderPrices() {
+    $('#qe-help').textContent = HELP_P;
+    $('thead').innerHTML = '<tr>' + HEAD_P + COLS.map(id => `<th data-k="p${id}">${esc(priceName(id))}</th>`).join('') + '</tr>';
+    const rows = visibleRows();
+    $('tbody').innerHTML = rows.map(r => `<tr data-id="${r.id}" class="${r.active ? '' : 'inact'}">` +
+      `<td><input type="checkbox" class="qe-sel"></td><td>${esc(r.number)}</td><td class="n" title="${esc(r.name)}">${esc(r.name)}</td>` +
+      `<td class="p" title="Netto (verfügbar): ${r.stock} · physisch im Hauptlager: ${r.phys}"><input data-stock="1" value="${r.wh ? r.phys : ''}" ${r.wh ? '' : 'disabled'}></td>` +
+      `<td class="p"><input data-ek="1" value="${fmt(r.ek)}"></td>` +
+      COLS.map(id => `<td class="p"><input data-sp="${id}" value="${fmt(r.pr[id])}"></td>`).join('') + '</tr>').join('');
+    root.querySelectorAll('input[data-stock]').forEach(inp => wireSimple(inp, 'stock'));
+    root.querySelectorAll('input[data-ek]').forEach(inp => wireSimple(inp, 'ek'));
+    wireCommon();
+    root.querySelectorAll('td.p input').forEach(inp => wireCell(inp));
+    rows.forEach(r => markWarn(r));
+    info(rows.length + ' von ' + ROWS.length + ' Varianten');
+  }
+  function renderCheck() {
+    $('#qe-help').textContent = HELP_C;
+    if (!CHECK_LOADED) { loadCheck().catch(e => info('Fehler: ' + e.message)); return; }
+    const rows = visibleRows();
+    const evals = rows.map(evalRow);
+    const missCount = CHECKS.map((c, i) => evals.filter(e => e[i].k === 'no' || (e[i].date && !e[i].v)).length);
+    $('thead').innerHTML = '<tr>' + HEAD + CHECKS.map((c, i) => `<th title="${esc(c.tip || '')}">${esc(c.h)}${missCount[i] ? `<small>${missCount[i]} fehlen</small>` : ''}</th>`).join('') + '</tr>';
+    $('tbody').innerHTML = rows.map((r, ri) => `<tr data-id="${r.id}" class="${r.active ? '' : 'inact'}">${baseCells(r)}` +
+      evals[ri].map(x => x.date ? `<td class="p ${x.v ? '' : 'err'}"><input type="date" data-prop="${x.date}" value="${x.v}"></td>`
+        : `<td class="c ${x.k}${x.fix ? ' fix' : ''}" title="${esc(x.tip || '')}" ${x.fix ? `data-fix="${x.fix}"` : ''}>${x.t}</td>`).join('') + '</tr>').join('');
+    wireCommon();
+    root.querySelectorAll('input[data-prop]').forEach(inp => inp.addEventListener('change', () => saveDate(inp)));
+    root.querySelectorAll('td[data-fix]').forEach(td => td.onclick = () => fixCell(td));
+    const gaps = evals.filter(rowHasGap).length;
+    info(`${rows.length} Varianten · ${gaps} mit Lücken`);
+  }
+  function markWarn(r) {
+    const tr = root.querySelector(`tr[data-id="${r.id}"]`); if (!tr) return;
+    COLS.forEach(id => {
+      const base = /otto/i.test(priceName(id)) ? pairOf(id) : null; const inp = tr.querySelector(`input[data-sp="${id}"]`); if (!inp) return;
+      inp.parentElement.classList.toggle('warn', !!(base && r.pr[id] != null && r.pr[base] != null && r.pr[id] >= r.pr[base]));
+    });
+  }
+
+  /* ---------- Speichern: Preise ---------- */
+  async function savePrice(r, spId, newVal, logIt = true) {
+    const old = r.pr[spId]; if (old === newVal || (old == null && newVal == null)) return 'same';
+    const base = `/rest/items/${r.itemId}/variations/${r.id}/variation_sales_prices`;
+    if (newVal == null) await api(`${base}/${spId}`, { method: 'DELETE' });
+    else if (old == null) await api(base, { method: 'POST', body: JSON.stringify({ salesPriceId: spId, price: newVal }) });
+    else await api(`${base}/${spId}`, { method: 'PUT', body: JSON.stringify({ price: newVal }) });
+    if (newVal == null) delete r.pr[spId]; else r.pr[spId] = newVal;
+    if (logIt) LOG.push({ t: new Date().toLocaleTimeString(), r, spId, old, val: newVal });
+    markWarn(r); return 'ok';
+  }
+  function cellFor(r, spId) { return root.querySelector(`tr[data-id="${r.id}"] input[data-sp="${spId}"]`); }
+  async function saveWithUi(r, spId, val, logIt) {
+    const inp = cellFor(r, spId); const td = inp && inp.parentElement;
+    td && (td.className = 'p saving');
+    try { const res = await savePrice(r, spId, val, logIt); if (inp) inp.value = fmt(r.pr[spId]);
+      td && (td.className = 'p ' + (res === 'ok' ? 'ok' : '')); markWarn(r);
+      stat(res === 'ok' ? `✔ ${r.number} · ${priceName(spId)} = ${fmt(val) || 'leer'}` : '');
+      return true;
+    } catch (e) { td && (td.className = 'p err'); td && (td.title = e.message); stat('✖ ' + r.number + ': ' + e.message); return false; }
+  }
+  function wireCell(inp) {
+    const tr = inp.closest('tr'); const r = ROWS.find(x => x.id == tr.dataset.id); const spId = +inp.dataset.sp;
+    const commit = async () => {
+      const v = parse(inp.value);
+      if (Number.isNaN(v)) { inp.parentElement.className = 'p err'; stat('✖ keine gültige Zahl: ' + inp.value); return; }
+      if (v === (r.pr[spId] ?? null)) { inp.value = fmt(r.pr[spId]); return; }
+      await saveWithUi(r, spId, v, true);
+    };
+    inp.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { inp.value = fmt(r.pr[spId]); inp.blur(); }
+      if (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault(); const dir = e.key === 'ArrowUp' ? 'previousElementSibling' : 'nextElementSibling';
+        const nxt = tr[dir] && tr[dir].querySelector(`input[data-sp="${spId}"]`); if (nxt) { nxt.focus(); nxt.select(); } else inp.blur();
+      }
+    });
+    inp.addEventListener('focus', () => inp.select());
+    inp.addEventListener('change', commit);
+  }
+
+  /* ---------- Speichern: Bestand / EK ---------- */
+  async function saveStock(r, qty) {
+    await api(`/rest/stockmanagement/warehouses/${r.wh}/stock/correction`, { method: 'PUT',
+      body: JSON.stringify({ corrections: [{ variationId: r.id, reasonId: 301, quantity: qty, storageLocationId: 0 }] }) });
+    const diff = qty - r.phys; r.phys = qty; r.stock += diff;
+  }
+  async function saveEk(r, val) {
+    await api(`/rest/items/${r.itemId}/variations/${r.id}`, { method: 'PUT', body: JSON.stringify({ purchasePrice: val }) });
+    r.ek = val;
+  }
+  function wireSimple(inp, kind) {
+    const tr = inp.closest('tr'); const r = ROWS.find(x => x.id == tr.dataset.id);
+    const cur = () => kind === 'stock' ? String(r.phys) : fmt(r.ek);
+    inp.addEventListener('focus', () => inp.select());
+    inp.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { inp.value = cur(); inp.blur(); }
+      if (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault(); const dir = e.key === 'ArrowUp' ? 'previousElementSibling' : 'nextElementSibling';
+        const nxt = tr[dir] && tr[dir].querySelector(kind === 'stock' ? 'input[data-stock]' : 'input[data-ek]'); if (nxt) { nxt.focus(); nxt.select(); } else inp.blur();
+      }
+    });
+    inp.addEventListener('change', async () => {
+      const td = inp.parentElement; let v = parse(inp.value);
+      if (v == null || Number.isNaN(v) || (kind === 'stock' && (v < 0 || !Number.isInteger(v)))) { td.className = 'p err'; stat('✖ ungültiger Wert: ' + inp.value); return; }
+      const old = kind === 'stock' ? r.phys : r.ek; if (v === old) { inp.value = cur(); return; }
+      td.className = 'p saving';
+      try {
+        if (kind === 'stock') await saveStock(r, v); else await saveEk(r, v);
+        LOG.push({ t: new Date().toLocaleTimeString(), r, kind, label: kind === 'stock' ? 'Bestand' : 'EK', old, val: v });
+        inp.value = cur(); td.className = 'p ok';
+        if (kind === 'stock') td.title = `Netto (verfügbar): ${r.stock} · physisch im Hauptlager: ${r.phys}`;
+        stat(`✔ ${r.number} · ${kind === 'stock' ? 'Bestand' : 'EK'} ${kind === 'stock' ? old : fmt(old)} → ${kind === 'stock' ? v : fmt(v)}`);
+      } catch (e) { td.className = 'p err'; td.title = e.message; stat('✖ ' + r.number + ': ' + e.message); }
+    });
+  }
+
+  /* ---------- Speichern: Check-Reiter ---------- */
+  // Plenty aktualisiert den Suchindex (Katalogfilter) nur bei Variantenänderung → Position kurz anstupsen
+  async function nudge(r) {
+    const p = r.position || 0;
+    await api(`/rest/items/${r.itemId}/variations/${r.id}`, { method: 'PUT', body: JSON.stringify({ position: p + 1 }) });
+    await api(`/rest/items/${r.itemId}/variations/${r.id}`, { method: 'PUT', body: JSON.stringify({ position: p }) });
+  }
+  async function saveDate(inp) {
+    const r = ROWS.find(x => x.id == inp.closest('tr').dataset.id); const pid = +inp.dataset.prop; const td = inp.parentElement;
+    const val = inp.value ? inp.value + ' 00:00:00' : ''; const p = r.c.props[pid]; const old = p ? p.val : null;
+    td.className = 'p saving';
+    try {
+      if (!val) { if (p) await api(`/rest/properties/relations/${p.rel.id}`, { method: 'DELETE' }); delete r.c.props[pid]; }
+      else if (p && p.valId) { await api(`/rest/properties/relations/values/${p.valId}`, { method: 'PUT', body: JSON.stringify({ propertyRelationId: p.rel.id, lang: p.lang || '0', value: val }) }); p.val = val; }
+      else {
+        const j = await api('/rest/properties/relations', { method: 'POST', body: JSON.stringify({ propertyId: pid, relationTargetId: r.id, relationTypeIdentifier: 'item', relationValues: [{ lang: '0', value: val }] }) });
+        r.c.props[pid] = { rel: j, val, valId: ((j.relationValues || [])[0] || {}).id, lang: '0' };
+      }
+      await nudge(r);
+      LOG.push({ t: new Date().toLocaleTimeString(), r, label: 'Datum ' + pid, old: old ? String(old).slice(0, 10) : '–', val: inp.value || '–' });
+      td.className = 'p ok'; stat(`✔ ${r.number} · Datum gespeichert: ${inp.value || 'leer'}`);
+    } catch (e) { td.className = 'p err'; td.title = e.message; stat('✖ ' + r.number + ': ' + e.message); }
+  }
+  async function fixCell(td) {
+    const r = ROWS.find(x => x.id == td.closest('tr').dataset.id); const what = td.dataset.fix;
+    const text = what === 'webapi' ? `WEB-API-SKU (148) = „${r.number}“ anlegen + Markt WEB-API aktivieren?` : `Mandant FireMat.de bei ${r.number} aktivieren?`;
+    if (!confirm(r.number + ': ' + text)) return;
+    td.className = 'c saving';
+    try {
+      const b = `/rest/items/${r.itemId}/variations/${r.id}`;
+      if (what === 'webapi') {
+        if (!r.c.markets.has('148')) { await api(b + '/variation_markets', { method: 'POST', body: JSON.stringify({ marketId: 148 }) }); r.c.markets.add('148'); }
+        const j = await api(b + '/variation_skus', { method: 'POST', body: JSON.stringify({ marketId: 148, accountId: 0, sku: r.number }) }); r.c.skus.push(j);
+      } else {
+        await api(b + '/variation_clients', { method: 'POST', body: JSON.stringify({ plentyId: CLIENT_ID }) }); r.c.clients.push(CLIENT_ID);
+      }
+      LOG.push({ t: new Date().toLocaleTimeString(), r, label: what === 'webapi' ? 'WEB-API-SKU angelegt' : 'Mandant aktiviert', old: '✗', val: '✓', noUndo: true });
+      stat('✔ ' + r.number + ': ergänzt'); render();
+    } catch (e) { td.className = 'c err'; td.title = e.message; stat('✖ ' + r.number + ': ' + e.message); }
+  }
+
+  /* ---------- Massenänderung (Preise) ---------- */
+  function buildBulkSelect() { $('#qe-bcol').innerHTML = COLS.map(id => `<option value="${id}">${esc(priceName(id))}</option>`).join(''); }
+  $('#qe-bgo').onclick = async () => {
+    const spId = +$('#qe-bcol').value, op = $('#qe-bop').value, val = parse($('#qe-bval').value);
+    const sel = [...root.querySelectorAll('.qe-sel:checked')].map(c => ROWS.find(x => x.id == c.closest('tr').dataset.id));
+    if (!sel.length) { stat('⚠ Erst links die Zeilen anhaken (Kästchen vor der Nummer), dann Anwenden.'); return; }
+    if (val == null || Number.isNaN(val)) { stat('⚠ Wert eingeben, z. B. -0,10'); return; }
+    const plan = sel.map(r => { const o = r.pr[spId]; if (o == null && op !== 'set') return null;
+      const n = op === 'set' ? val : op === 'add' ? o + val : o * (1 + val / 100); return { r, n: Math.round(n * 100) / 100 }; }).filter(Boolean);
+    if (!plan.length) { stat('⚠ Die markierten Zeilen haben in dieser Spalte keinen Preis.'); return; }
+    if (!confirm(`${priceName(spId)}: ${plan.length} Preise ändern?\nBeispiel: ${plan[0].r.number}  ${fmt(plan[0].r.pr[spId])} → ${fmt(plan[0].n)}`)) return;
+    const batch = []; let ok = 0;
+    for (const p of plan) { const old = p.r.pr[spId]; if (await saveWithUi(p.r, spId, p.n, false)) { ok++; batch.push({ r: p.r, spId, old, val: p.n }); } }
+    LOG.push({ t: new Date().toLocaleTimeString(), batch }); stat(`✔ ${ok}/${plan.length} gespeichert`);
+  };
+
+  /* ---------- Rückgängig / Protokoll ---------- */
+  $('#qe-undo').onclick = async () => {
+    let i = LOG.length - 1; while (i >= 0 && (LOG[i].noUndo || (LOG[i].label && !LOG[i].kind))) i--;
+    if (i < 0) return stat('Nichts rückgängig zu machen (Preise). Daten/Ergänzungen bitte direkt korrigieren.');
+    const last = LOG.splice(i, 1)[0];
+    if (last.kind) {
+      try { if (last.kind === 'stock') await saveStock(last.r, last.old); else await saveEk(last.r, last.old); render(); stat(`↶ ${last.r.number} · ${last.label} zurück auf ${last.old}`); }
+      catch (e) { stat('✖ Rückgängig fehlgeschlagen: ' + e.message); }
+      return;
+    }
+    const list = last.batch || [last]; let ok = 0;
+    for (const e of list) if (await saveWithUi(e.r, e.spId, e.old ?? null, false)) ok++;
+    stat(`↶ ${ok} Preisänderung(en) zurückgesetzt`);
+  };
+  $('#qe-logb').onclick = () => {
+    const ex = root.querySelector('.log'); if (ex) return ex.remove();
+    const d = document.createElement('div'); d.className = 'log';
+    const lines = LOG.flatMap(e => (e.batch || [e]).map(x => `${e.t}  ${x.r.number}  ${x.label || priceName(x.spId)}: ${x.label ? x.old : (fmt(x.old) || '–')} → ${x.label ? x.val : (fmt(x.val) || '–')}`));
+    d.innerHTML = '<b>Änderungen dieser Sitzung</b><br>' + (lines.length ? lines.reverse().map(esc).join('<br>') : 'noch keine');
+    root.querySelector('#qe').appendChild(d);
+  };
+
+  /* ---------- Spaltenauswahl ---------- */
+  $('#qe-cols').onclick = () => {
+    const ex = root.querySelector('.pop'); if (ex) return ex.remove();
+    const d = document.createElement('div'); d.className = 'pop';
+    d.innerHTML = PRICES.map(p => `<label><input type="checkbox" value="${p.id}" ${COLS.includes(p.id) ? 'checked' : ''}> ${esc(p.name)}</label>`).join('') +
+      '<div style="column-span:all;margin-top:8px;display:flex;gap:6px;flex-wrap:wrap"><button id="qe-colall">alle</button><button id="qe-colnone">keine</button><input id="qe-colf" placeholder="Filter z. B. ebay" style="padding:4px"><button id="qe-colok">Übernehmen</button></div>';
+    root.querySelector('#qe').appendChild(d);
+    d.querySelector('#qe-colall').onclick = () => d.querySelectorAll('label input').forEach(i => i.checked = true);
+    d.querySelector('#qe-colnone').onclick = () => d.querySelectorAll('label input').forEach(i => i.checked = false);
+    d.querySelector('#qe-colf').oninput = e => { const q = e.target.value.toLowerCase(); d.querySelectorAll('label').forEach(l => l.style.display = l.textContent.toLowerCase().includes(q) ? '' : 'none'); };
+    d.querySelector('#qe-colok').onclick = () => {
+      const chosen = [...d.querySelectorAll('input:checked')].map(i => +i.value);
+      COLS = PRICES.filter(p => chosen.includes(p.id)).map(p => p.id);
+      localStorage.qeCols2 = JSON.stringify(COLS); d.remove(); buildBulkSelect(); render();
+    };
+  };
+
+  /* ---------- Reiter ---------- */
+  function setTab(t) {
+    TAB = t; $('#qe-tp').classList.toggle('on', t === 'p'); $('#qe-tc').classList.toggle('on', t === 'c');
+    root.querySelector('.only-p').style.display = t === 'p' ? 'contents' : 'none';
+    root.querySelector('.only-c').style.display = t === 'c' ? 'contents' : 'none';
+    render();
+  }
+  $('#qe-tp').onclick = () => setTab('p'); $('#qe-tc').onclick = () => setTab('c');
+
+  let tmr; $('#qe-q').oninput = () => { clearTimeout(tmr); tmr = setTimeout(render, 250); };
+  $('#qe-act').onchange = render; $('#qe-stk').onchange = render; $('#qe-gap').onchange = render;
+  $('#qe-reload').onclick = () => load().catch(e => info('Fehler: ' + e.message));
+  load().catch(e => info('Fehler beim Laden: ' + e.message));
+})();

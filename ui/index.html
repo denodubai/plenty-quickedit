@@ -3,7 +3,7 @@
 <style>html,body{margin:0;height:100%}</style></head>
 <body>
 <script>
-/* Plenty Quick-Edit – Prototyp v0.3.1 (26.11.2026)
+/* Plenty Quick-Edit – Prototyp v0.4 (26.11.2026)
    Reiter „Preise“: alle Varianten, Preise direkt in der Zelle ändern.
    Reiter „Check“: Vollständigkeit je Variante (Mandant, EAN, Kategorie, Beschreibung, Produkttyp,
    SKU-Zeilen je Kanal, Kaufland-Status/Unit, Otto-/Kaufland-Kategorie, Angebotsdaten).
@@ -99,7 +99,7 @@
   const info = t => $('#qe-info').textContent = t;
   const stat = t => $('#qe-stat').textContent = t;
   $('#qe-close').style.display = 'none';
-  const HELP_P = 'Enter = speichern + nächste Zeile · Esc = verwerfen · orange = OTTO Sales ≥ OTTO (kein Angebot)';
+  const HELP_P = 'Bestand ✎ = Bestandskorrektur im Hauptlager · Enter = speichern + nächste Zeile · Esc = verwerfen · orange = OTTO Sales ≥ OTTO (kein Angebot)';
   const HELP_C = '✓ ok · ✗ fehlt · ! prüfen · – Kanal nicht aktiv · unterstrichen = per Klick ergänzen · Datum direkt änderbar';
 
   /* ---------- Daten ---------- */
@@ -124,8 +124,12 @@
     const vars = await pages('/rest/items/variations?itemsPerPage=250&with=variationSalesPrices,stock');
     ROWS = vars.map(v => {
       const pr = {}; (v.variationSalesPrices || []).forEach(x => pr[x.salesPriceId] = x.price);
-      const stock = (v.stock || []).filter(s => s.variationId === v.id).reduce((a, s) => a + (s.netStock || 0), 0);
-      return { id: v.id, itemId: v.itemId, number: v.number || '', name: v.name || '', active: v.isActive, isMain: v.isMain, position: v.position, stock, pr };
+      const st = (v.stock || []).filter(s => s.variationId === v.id);
+      const stock = st.reduce((a, s) => a + (s.netStock || 0), 0);
+      const wh = v.mainWarehouseId || (st[0] || {}).warehouseId || null;
+      const phys = (st.find(s => s.warehouseId === wh) || {}).physicalStock ?? 0;
+      return { id: v.id, itemId: v.itemId, number: v.number || '', name: v.name || '', active: v.isActive, isMain: v.isMain, position: v.position,
+        stock, phys, wh, ek: v.purchasePrice, pr };
     });
     const mainName = {}; ROWS.forEach(r => { if (r.isMain && r.name) mainName[r.itemId] = r.name; });
     ROWS.forEach(r => { if (!r.name) r.name = mainName[r.itemId] || ''; });
@@ -222,13 +226,19 @@
     const all = $('#qe-all'); if (all) all.onchange = e => root.querySelectorAll('.qe-sel').forEach(c => { c.checked = e.target.checked; c.closest('tr').classList.toggle('sel', c.checked); });
     root.querySelectorAll('.qe-sel').forEach(c => c.onchange = () => c.closest('tr').classList.toggle('sel', c.checked));
   }
+  const HEAD_P = `<th><input type="checkbox" id="qe-all"></th><th data-k="number">Nummer</th><th data-k="name">Name</th><th data-k="phys" title="physischer Bestand im Hauptlager – ändern = Bestandskorrektur">Bestand ✎</th><th data-k="ek">EK</th>`;
   const HEAD = `<th><input type="checkbox" id="qe-all"></th><th data-k="number">Nummer</th><th data-k="name">Name</th><th data-k="stock">Bestand</th>`;
   function renderPrices() {
     $('#qe-help').textContent = HELP_P;
-    $('thead').innerHTML = '<tr>' + HEAD + COLS.map(id => `<th data-k="p${id}">${esc(priceName(id))}</th>`).join('') + '</tr>';
+    $('thead').innerHTML = '<tr>' + HEAD_P + COLS.map(id => `<th data-k="p${id}">${esc(priceName(id))}</th>`).join('') + '</tr>';
     const rows = visibleRows();
-    $('tbody').innerHTML = rows.map(r => `<tr data-id="${r.id}" class="${r.active ? '' : 'inact'}">${baseCells(r)}` +
+    $('tbody').innerHTML = rows.map(r => `<tr data-id="${r.id}" class="${r.active ? '' : 'inact'}">` +
+      `<td><input type="checkbox" class="qe-sel"></td><td>${esc(r.number)}</td><td class="n" title="${esc(r.name)}">${esc(r.name)}</td>` +
+      `<td class="p" title="Netto (verfügbar): ${r.stock} · physisch im Hauptlager: ${r.phys}"><input data-stock="1" value="${r.wh ? r.phys : ''}" ${r.wh ? '' : 'disabled'}></td>` +
+      `<td class="p"><input data-ek="1" value="${fmt(r.ek)}"></td>` +
       COLS.map(id => `<td class="p"><input data-sp="${id}" value="${fmt(r.pr[id])}"></td>`).join('') + '</tr>').join('');
+    root.querySelectorAll('input[data-stock]').forEach(inp => wireSimple(inp, 'stock'));
+    root.querySelectorAll('input[data-ek]').forEach(inp => wireSimple(inp, 'ek'));
     wireCommon();
     root.querySelectorAll('td.p input').forEach(inp => wireCell(inp));
     rows.forEach(r => markWarn(r));
@@ -298,6 +308,42 @@
     inp.addEventListener('change', commit);
   }
 
+  /* ---------- Speichern: Bestand / EK ---------- */
+  async function saveStock(r, qty) {
+    await api(`/rest/stockmanagement/warehouses/${r.wh}/stock/correction`, { method: 'PUT',
+      body: JSON.stringify({ corrections: [{ variationId: r.id, reasonId: 301, quantity: qty, storageLocationId: 0 }] }) });
+    const diff = qty - r.phys; r.phys = qty; r.stock += diff;
+  }
+  async function saveEk(r, val) {
+    await api(`/rest/items/${r.itemId}/variations/${r.id}`, { method: 'PUT', body: JSON.stringify({ purchasePrice: val }) });
+    r.ek = val;
+  }
+  function wireSimple(inp, kind) {
+    const tr = inp.closest('tr'); const r = ROWS.find(x => x.id == tr.dataset.id);
+    const cur = () => kind === 'stock' ? String(r.phys) : fmt(r.ek);
+    inp.addEventListener('focus', () => inp.select());
+    inp.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { inp.value = cur(); inp.blur(); }
+      if (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault(); const dir = e.key === 'ArrowUp' ? 'previousElementSibling' : 'nextElementSibling';
+        const nxt = tr[dir] && tr[dir].querySelector(kind === 'stock' ? 'input[data-stock]' : 'input[data-ek]'); if (nxt) { nxt.focus(); nxt.select(); } else inp.blur();
+      }
+    });
+    inp.addEventListener('change', async () => {
+      const td = inp.parentElement; let v = parse(inp.value);
+      if (v == null || Number.isNaN(v) || (kind === 'stock' && (v < 0 || !Number.isInteger(v)))) { td.className = 'p err'; stat('✖ ungültiger Wert: ' + inp.value); return; }
+      const old = kind === 'stock' ? r.phys : r.ek; if (v === old) { inp.value = cur(); return; }
+      td.className = 'p saving';
+      try {
+        if (kind === 'stock') await saveStock(r, v); else await saveEk(r, v);
+        LOG.push({ t: new Date().toLocaleTimeString(), r, kind, label: kind === 'stock' ? 'Bestand' : 'EK', old, val: v });
+        inp.value = cur(); td.className = 'p ok';
+        if (kind === 'stock') td.title = `Netto (verfügbar): ${r.stock} · physisch im Hauptlager: ${r.phys}`;
+        stat(`✔ ${r.number} · ${kind === 'stock' ? 'Bestand' : 'EK'} ${kind === 'stock' ? old : fmt(old)} → ${kind === 'stock' ? v : fmt(v)}`);
+      } catch (e) { td.className = 'p err'; td.title = e.message; stat('✖ ' + r.number + ': ' + e.message); }
+    });
+  }
+
   /* ---------- Speichern: Check-Reiter ---------- */
   // Plenty aktualisiert den Suchindex (Katalogfilter) nur bei Variantenänderung → Position kurz anstupsen
   async function nudge(r) {
@@ -357,9 +403,14 @@
 
   /* ---------- Rückgängig / Protokoll ---------- */
   $('#qe-undo').onclick = async () => {
-    let i = LOG.length - 1; while (i >= 0 && (LOG[i].noUndo || LOG[i].label)) i--;
+    let i = LOG.length - 1; while (i >= 0 && (LOG[i].noUndo || (LOG[i].label && !LOG[i].kind))) i--;
     if (i < 0) return stat('Nichts rückgängig zu machen (Preise). Daten/Ergänzungen bitte direkt korrigieren.');
     const last = LOG.splice(i, 1)[0];
+    if (last.kind) {
+      try { if (last.kind === 'stock') await saveStock(last.r, last.old); else await saveEk(last.r, last.old); render(); stat(`↶ ${last.r.number} · ${last.label} zurück auf ${last.old}`); }
+      catch (e) { stat('✖ Rückgängig fehlgeschlagen: ' + e.message); }
+      return;
+    }
     const list = last.batch || [last]; let ok = 0;
     for (const e of list) if (await saveWithUi(e.r, e.spId, e.old ?? null, false)) ok++;
     stat(`↶ ${ok} Preisänderung(en) zurückgesetzt`);
