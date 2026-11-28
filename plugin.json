@@ -2,7 +2,7 @@
     "name": "PlentyQuickEdit",
     "namespace": "PlentyQuickEdit",
     "type": "backend",
-    "version": "0.5.1",
+    "version": "0.5.2",
     "description": "Quick-Edit: alle Varianten in einer Tabelle, Preise direkt in der Zelle ändern (wie Excel).",
     "author": "Keycoon GmbH",
     "authorIcon": "icon_author_xs.png",

@@ -1,4 +1,4 @@
-/* Plenty Quick-Edit – Prototyp v0.4 (26.11.2026)
+/* Plenty Quick-Edit – Prototyp v0.5 (28.11.2026)
    Reiter „Preise“: alle Varianten, Preise direkt in der Zelle ändern.
    Reiter „Check“: Vollständigkeit je Variante (Mandant, EAN, Kategorie, Beschreibung, Produkttyp,
    SKU-Zeilen je Kanal, Kaufland-Status/Unit, Otto-/Kaufland-Kategorie, Angebotsdaten).
@@ -37,6 +37,8 @@
 #qe header label{display:flex;gap:4px;align-items:center;white-space:nowrap}
 #qe header select,#qe header .num{padding:4px;border-radius:4px;border:0}
 #qe .num{width:70px}
+#qe .chanrow button.chan{background:#24475a}#qe .chanrow button.chan.on{background:#2e9a6b;font-weight:700}
+#qe td.zero{background:#ffd6d6!important}#qe td.zero input{color:#b00020;font-weight:700}
 #qe .only-p,#qe .only-c{display:contents}
 #qe .wrap{flex:1;overflow:auto}
 #qe table{border-collapse:separate;border-spacing:0;background:#fff;min-width:100%}
@@ -83,6 +85,12 @@
   <button class="sec" id="qe-logb">Protokoll</button>
   <button class="sec" id="qe-reload">Neu laden</button>
   <button class="x" id="qe-close">✕</button>
+  <div class="only-p chanrow" style="flex-basis:100%;display:flex;gap:6px;align-items:center">
+   <span>Kanal:</span>
+   <button class="chan" data-ch="">Alle</button><button class="chan" data-ch="Amazon">Amazon</button><button class="chan" data-ch="Kaufland">Kaufland</button>
+   <button class="chan" data-ch="Woocommerce">Woocommerce</button><button class="chan" data-ch="eBay">eBay</button><button class="chan" data-ch="Otto">Otto</button><button class="chan" data-ch="Sonstige">Sonstige</button>
+   <span style="color:#9fb4bf;margin-left:8px">(mehrere anklickbar)</span>
+  </div>
  </header>
  <div class="wrap"><table><thead></thead><tbody></tbody></table></div>
  <footer><span id="qe-info">Lade …</span><span id="qe-stat"></span><span id="qe-help" style="margin-left:auto;color:#666"></span></footer>
@@ -110,9 +118,19 @@
       return { id: p.id, name: n.nameInternal || n.nameExternal || ('Preis ' + p.id) };
     }).sort((a, b) => a.name.localeCompare(b.name));
     // Standardpreis (kleinste ID = Plenty-Hauptpreis) zuerst, danach alphabetisch
-    const minId = Math.min(...PRICES.map(p => p.id)); PRICES.sort((a, b) => (a.id === minId ? -1 : b.id === minId ? 1 : a.name.localeCompare(b.name)));
-    let saved = null; try { saved = JSON.parse(localStorage.qeCols2 || 'null'); } catch (e) {}
-    COLS = saved && saved.length ? saved.filter(id => PRICES.some(p => p.id === id)) : PRICES.map(p => p.id);  // Standard: alle Preise
+    // Reihenfolge: je Kanal/Land Normalpreis → Sale/Sales → B2B; Woo: Woocommerce, Woocommerce Sale, Manuell Sales Preis
+    const minId = Math.min(...PRICES.map(p => p.id));
+    const CH_ORDER = ['Sonstige', 'Amazon', 'Kaufland', 'Woocommerce', 'eBay', 'Otto'];
+    PRICES.forEach(p => {
+      const n = p.name; p.ch = channelOf(n);
+      let base = n.replace(/\s+(sales?|b2b)$/i, '').trim(); let sub = /sales?$/i.test(n) ? 1 : /b2b$/i.test(n) ? 2 : 0;
+      if (/^manuell sales/i.test(n)) { base = 'Woocommerce'; sub = 3; }
+      p.base = base; p.sub = sub;
+    });
+    PRICES.sort((a, b) => (a.id === minId ? -1 : b.id === minId ? 1 :
+      (CH_ORDER.indexOf(a.ch) - CH_ORDER.indexOf(b.ch)) || a.base.localeCompare(b.base) || (a.sub - b.sub)));
+    let saved = null; try { saved = JSON.parse(localStorage.qeCols3 || 'null'); } catch (e) {}
+    COLS = saved && saved.length ? PRICES.filter(p => saved.includes(p.id)).map(p => p.id) : PRICES.map(p => p.id);  // Standard: alle Preise
     info('Lade Varianten …');
     const vars = await pages('/rest/items/variations?itemsPerPage=250&with=variationSalesPrices,stock');
     ROWS = vars.map(v => {
@@ -192,6 +210,13 @@
   const rowHasGap = cells => cells.some(x => x.k === 'no' || x.k === 'wa' || (x.date && !x.v));
 
   /* ---------- Darstellung ---------- */
+  function channelOf(n) {
+    if (/^amz|amazon/i.test(n)) return 'Amazon'; if (/kaufland/i.test(n)) return 'Kaufland';
+    if (/woo|manuell sales/i.test(n)) return 'Woocommerce'; if (/ebay/i.test(n)) return 'eBay';
+    if (/otto/i.test(n)) return 'Otto'; return 'Sonstige';
+  }
+  let CHAN = new Set(); try { CHAN = new Set(JSON.parse(localStorage.qeChan || '[]')); } catch (e) {}
+  const visCols = () => CHAN.size ? COLS.filter(id => CHAN.has((PRICES.find(p => p.id === id) || {}).ch)) : COLS;
   const priceName = id => (PRICES.find(p => p.id === id) || {}).name || id;
   function pairOf(id) {
     const n = priceName(id); const m = n.match(/^(.*?)\s+(sales?|angebot)$/i);
@@ -223,17 +248,18 @@
   const HEAD = `<th><input type="checkbox" id="qe-all"></th><th data-k="number">Nummer</th><th data-k="name">Name</th><th data-k="stock">Bestand</th>`;
   function renderPrices() {
     $('#qe-help').textContent = HELP_P;
-    $('thead').innerHTML = '<tr>' + HEAD_P + COLS.map(id => `<th data-k="p${id}">${esc(priceName(id))}</th>`).join('') + '</tr>';
+    const VC = visCols();
+    $('thead').innerHTML = '<tr>' + HEAD_P + VC.map(id => `<th data-k="p${id}">${esc(priceName(id))}</th>`).join('') + '</tr>';
     const rows = visibleRows();
     $('tbody').innerHTML = rows.map(r => `<tr data-id="${r.id}" class="${r.active ? '' : 'inact'}">` +
       `<td><input type="checkbox" class="qe-sel"></td><td>${esc(r.number)}</td><td class="n" title="${esc(r.name)}">${esc(r.name)}</td>` +
       `<td class="p" title="Netto (verfügbar): ${r.stock} · physisch im Hauptlager: ${r.phys}"><input data-stock="1" value="${r.wh ? r.phys : ''}" ${r.wh ? '' : 'disabled'}></td>` +
       `<td class="p"><input data-ek="1" value="${fmt(r.ek)}"></td>` +
-      COLS.map(id => `<td class="p"><input data-sp="${id}" value="${fmt(r.pr[id])}"></td>`).join('') + '</tr>').join('');
+      VC.map(id => `<td class="p"><input data-sp="${id}" inputmode="decimal" value="${fmt(r.pr[id])}"></td>`).join('') + '</tr>').join('');
     root.querySelectorAll('input[data-stock]').forEach(inp => wireSimple(inp, 'stock'));
     root.querySelectorAll('input[data-ek]').forEach(inp => wireSimple(inp, 'ek'));
     wireCommon();
-    root.querySelectorAll('td.p input').forEach(inp => wireCell(inp));
+    root.querySelectorAll('td.p input[data-sp]').forEach(inp => wireCell(inp));
     rows.forEach(r => markWarn(r));
     info(rows.length + ' von ' + ROWS.length + ' Varianten');
   }
@@ -258,6 +284,12 @@
     COLS.forEach(id => {
       const base = /otto/i.test(priceName(id)) ? pairOf(id) : null; const inp = tr.querySelector(`input[data-sp="${id}"]`); if (!inp) return;
       inp.parentElement.classList.toggle('warn', !!(base && r.pr[id] != null && r.pr[base] != null && r.pr[id] >= r.pr[base]));
+      const pr = PRICES.find(p => p.id === id) || {}; const v = r.pr[id];
+      const sibs = PRICES.filter(p => p.base === pr.base && p.ch === pr.ch && p.id !== id && (p.sub <= 1));
+      const missing = v == null && pr.sub <= 1 && sibs.some(p => r.pr[p.id] != null);   // Normal- oder Sales-Preis fehlt, Partner vorhanden
+      const zero = v != null && Number(v) <= 0;
+      inp.parentElement.classList.toggle('zero', zero || missing);
+      inp.parentElement.title = zero ? 'Preis 0 – nicht erlaubt' : missing ? 'Preis fehlt (Partnerpreis vorhanden)' : '';
     });
   }
 
@@ -286,6 +318,7 @@
     const tr = inp.closest('tr'); const r = ROWS.find(x => x.id == tr.dataset.id); const spId = +inp.dataset.sp;
     const commit = async () => {
       const v = parse(inp.value);
+      if (v !== null && !Number.isNaN(v) && v <= 0) { inp.parentElement.className = 'p err zero'; stat('✖ Preis 0 ist nicht erlaubt'); inp.value = fmt(r.pr[spId]); return; }
       if (Number.isNaN(v)) { inp.parentElement.className = 'p err'; stat('✖ keine gültige Zahl: ' + inp.value); return; }
       if (v === (r.pr[spId] ?? null)) { inp.value = fmt(r.pr[spId]); return; }
       await saveWithUi(r, spId, v, true);
@@ -378,8 +411,25 @@
     } catch (e) { td.className = 'c err'; td.title = e.message; stat('✖ ' + r.number + ': ' + e.message); }
   }
 
+  // nur Zahlen, Komma, Punkt, Minus zulassen (alle Eingabefelder der Tabelle)
+  root.addEventListener('beforeinput', e => {
+    const t = e.target; if (!t.matches || !t.matches('td.p input:not([type=date]), #qe-bval')) return;
+    if (e.data && /[^0-9,.\-]/.test(e.data)) e.preventDefault();
+  }, true);
+  root.addEventListener('paste', e => {
+    const t = e.target; if (!t.matches || !t.matches('td.p input:not([type=date]), #qe-bval')) return;
+    const d = (e.clipboardData || window.clipboardData).getData('text'); if (/[^0-9,.\-\s€]/.test(d)) { e.preventDefault(); stat('⚠ Nur Zahlen erlaubt'); }
+  }, true);
+  // Kanal-Filter
+  function paintChan() { root.querySelectorAll('button.chan').forEach(b => b.classList.toggle('on', b.dataset.ch ? CHAN.has(b.dataset.ch) : CHAN.size === 0)); }
+  root.querySelectorAll('button.chan').forEach(b => b.onclick = () => {
+    const c = b.dataset.ch; if (!c) CHAN.clear(); else if (CHAN.has(c)) CHAN.delete(c); else CHAN.add(c);
+    localStorage.qeChan = JSON.stringify([...CHAN]); paintChan(); buildBulkSelect(); render();
+  });
+  paintChan();
+
   /* ---------- Massenänderung (Preise) ---------- */
-  function buildBulkSelect() { $('#qe-bcol').innerHTML = COLS.map(id => `<option value="${id}">${esc(priceName(id))}</option>`).join(''); }
+  function buildBulkSelect() { $('#qe-bcol').innerHTML = visCols().map(id => `<option value="${id}">${esc(priceName(id))}</option>`).join(''); }
   $('#qe-bgo').onclick = async () => {
     const spId = +$('#qe-bcol').value, op = $('#qe-bop').value, val = parse($('#qe-bval').value);
     const sel = [...root.querySelectorAll('.qe-sel:checked')].map(c => ROWS.find(x => x.id == c.closest('tr').dataset.id));
@@ -388,6 +438,7 @@
     const plan = sel.map(r => { const o = r.pr[spId]; if (o == null && op !== 'set') return null;
       const n = op === 'set' ? val : op === 'add' ? o + val : o * (1 + val / 100); return { r, n: Math.round(n * 100) / 100 }; }).filter(Boolean);
     if (!plan.length) { stat('⚠ Die markierten Zeilen haben in dieser Spalte keinen Preis.'); return; }
+    if (plan.some(p => p.n <= 0)) { stat('✖ Abgebrochen: mindestens ein Preis würde 0 oder kleiner werden.'); return; }
     if (!confirm(`${priceName(spId)}: ${plan.length} Preise ändern?\nBeispiel: ${plan[0].r.number}  ${fmt(plan[0].r.pr[spId])} → ${fmt(plan[0].n)}`)) return;
     const batch = []; let ok = 0;
     for (const p of plan) { const old = p.r.pr[spId]; if (await saveWithUi(p.r, spId, p.n, false)) { ok++; batch.push({ r: p.r, spId, old, val: p.n }); } }
@@ -429,14 +480,14 @@
     d.querySelector('#qe-colok').onclick = () => {
       const chosen = [...d.querySelectorAll('input:checked')].map(i => +i.value);
       COLS = PRICES.filter(p => chosen.includes(p.id)).map(p => p.id);
-      localStorage.qeCols2 = JSON.stringify(COLS); d.remove(); buildBulkSelect(); render();
+      localStorage.qeCols3 = JSON.stringify(COLS); d.remove(); buildBulkSelect(); render();
     };
   };
 
   /* ---------- Reiter ---------- */
   function setTab(t) {
     TAB = t; $('#qe-tp').classList.toggle('on', t === 'p'); $('#qe-tc').classList.toggle('on', t === 'c');
-    root.querySelector('.only-p').style.display = t === 'p' ? 'contents' : 'none';
+    root.querySelectorAll('.only-p').forEach(el => el.style.display = t === 'p' ? (el.classList.contains('chanrow') ? 'flex' : 'contents') : 'none');
     root.querySelector('.only-c').style.display = t === 'c' ? 'contents' : 'none';
     render();
   }
@@ -445,6 +496,6 @@
   let tmr; $('#qe-q').oninput = () => { clearTimeout(tmr); tmr = setTimeout(render, 250); };
   $('#qe-act').onchange = render; $('#qe-stk').onchange = render; $('#qe-gap').onchange = render;
   $('#qe-reload').onclick = () => load().catch(e => info('Fehler: ' + e.message));
-  try { if (/[?&]tab=c\b/.test(location.search)) { TAB = 'c'; $('#qe-tp').classList.remove('on'); $('#qe-tc').classList.add('on'); root.querySelector('.only-p').style.display = 'none'; root.querySelector('.only-c').style.display = 'contents'; } } catch (e) {}
+  try { if (/[?&]tab=c\b/.test(location.search)) { TAB = 'c'; $('#qe-tp').classList.remove('on'); $('#qe-tc').classList.add('on'); root.querySelectorAll('.only-p').forEach(el => el.style.display = 'none'); root.querySelector('.only-c').style.display = 'contents'; } } catch (e) {}
   load().catch(e => info('Fehler beim Laden: ' + e.message));
 })();
