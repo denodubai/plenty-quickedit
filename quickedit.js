@@ -120,7 +120,8 @@
     const minId = Math.min(...PRICES.map(p => p.id));
     const CH_ORDER = ['Amazon', 'Kaufland', 'eBay', 'Otto', 'Woocommerce', 'Sonstige'];
     const LAND = ['DE', 'FR', 'IT', 'ES', 'NL', 'BE', 'PL', 'SE', 'IE', 'UK', 'AT', 'CZ', 'SK'];
-    const landRank = b => { const m = b.match(/\b(DE|FR|IT|ES|NL|BE|PL|SE|IE|UK|AT|CZ|SK)\b/i); return m ? LAND.indexOf(m[1].toUpperCase()) : (/^(amz|kaufland|otto|ebay)$/i.test(b.trim()) ? -1 : 50); };
+    const LAND_KL = ['DE', 'AT', 'CZ', 'SK', 'PL', 'FR', 'IT'];
+    const landRank = (b, ch) => { const L = ch === 'Kaufland' ? LAND_KL : LAND; const m = b.match(/\b(DE|FR|IT|ES|NL|BE|PL|SE|IE|UK|AT|CZ|SK)\b/i); return m ? (L.indexOf(m[1].toUpperCase()) + 1 || 40) : (/^(amz|kaufland|otto|ebay)$/i.test(b.trim()) ? -1 : 50); };
     PRICES.forEach(p => {
       const n = p.name; p.ch = channelOf(n);
       let base = n.replace(/\s+(sales?|b2b)$/i, '').trim(); let sub = /sales?$/i.test(n) ? 1 : /b2b$/i.test(n) ? 2 : 0;
@@ -128,7 +129,7 @@
       if (/plentyshop/i.test(n)) { base = 'Woocommerce'; sub = 4; }
       p.base = base; p.sub = sub;
     });
-    PRICES.sort((a, b) => (CH_ORDER.indexOf(a.ch) - CH_ORDER.indexOf(b.ch)) || (landRank(a.base) - landRank(b.base)) ||
+    PRICES.sort((a, b) => (CH_ORDER.indexOf(a.ch) - CH_ORDER.indexOf(b.ch)) || (landRank(a.base, a.ch) - landRank(b.base, b.ch)) ||
       a.base.localeCompare(b.base) || (a.sub - b.sub));
     let saved = null; try { saved = JSON.parse(localStorage.qeCols4 || 'null'); } catch (e) {}
     COLS = saved && saved.length ? PRICES.filter(p => saved.includes(p.id)).map(p => p.id) : PRICES.map(p => p.id);  // Standard: alle Preise
