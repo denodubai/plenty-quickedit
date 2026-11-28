@@ -37,6 +37,7 @@
 #qe header label{display:flex;gap:4px;align-items:center;white-space:nowrap}
 #qe header select,#qe header .num{padding:4px;border-radius:4px;border:0}
 #qe .num{width:70px}
+#qe th.gA{background:#b7c3ca!important}#qe th.gB{background:#e6ecef!important}
 #qe .chanrow button.chan{background:#24475a}#qe .chanrow button.chan.on{background:#2e9a6b;font-weight:700}
 #qe td.zero{background:#ffd6d6!important}#qe td.zero input{color:#b00020;font-weight:700}
 #qe .only-p,#qe .only-c{display:contents}
@@ -87,7 +88,7 @@
   <button class="x" id="qe-close">✕</button>
   <div class="only-p chanrow" style="flex-basis:100%;display:flex;gap:6px;align-items:center">
    <span>Kanal:</span>
-   <button class="chan" data-ch="Amazon">Amazon</button><button class="chan" data-ch="Kaufland">Kaufland</button><button class="chan" data-ch="eBay">eBay</button><button class="chan" data-ch="Otto">Otto</button><button class="chan" data-ch="Woocommerce">Woocommerce / Plenty</button>
+   <button class="chan" data-ch="Alle">Alle</button><button class="chan" data-ch="Amazon">Amazon</button><button class="chan" data-ch="Kaufland">Kaufland</button><button class="chan" data-ch="eBay">eBay</button><button class="chan" data-ch="Otto">Otto</button><button class="chan" data-ch="Woocommerce">Woocommerce / Plenty</button>
   </div>
  </header>
  <div class="wrap"><table><thead></thead><tbody></tbody></table></div>
@@ -218,7 +219,7 @@
     if (/otto/i.test(n)) return 'Otto'; return 'Sonstige';
   }
   let CHAN = localStorage.qeChan1 || 'Amazon';
-  const visCols = () => COLS.filter(id => (PRICES.find(p => p.id === id) || {}).ch === CHAN);
+  const visCols = () => CHAN === 'Alle' ? COLS : COLS.filter(id => (PRICES.find(p => p.id === id) || {}).ch === CHAN);
   const priceName = id => (PRICES.find(p => p.id === id) || {}).name || id;
   function pairOf(id) {
     const n = priceName(id); const m = n.match(/^(.*?)\s+(sales?|angebot)$/i);
@@ -251,7 +252,11 @@
   function renderPrices() {
     $('#qe-help').textContent = HELP_P;
     const VC = visCols();
-    $('thead').innerHTML = '<tr>' + HEAD_P + VC.map(id => `<th data-k="p${id}">${esc(priceName(id))}</th>`).join('') + '</tr>';
+    // Kopfzeile: zusammengehörige Spalten (z. B. AMZ DE / DE SALES / DE B2B) gleiche Farbe, Gruppen abwechselnd dunkel/hell
+    let gi = 0, lastG = null;
+    const ths = VC.map(id => { const pr = PRICES.find(p => p.id === id) || {}; const g = pr.ch + '|' + pr.base; if (lastG !== null && g !== lastG) gi++; lastG = g;
+      return `<th data-k="p${id}" class="${gi % 2 ? 'gB' : 'gA'}">${esc(priceName(id))}</th>`; });
+    $('thead').innerHTML = '<tr>' + HEAD_P + ths.join('') + '</tr>';
     const rows = visibleRows();
     $('tbody').innerHTML = rows.map(r => `<tr data-id="${r.id}" class="${r.active ? '' : 'inact'}">` +
       `<td><input type="checkbox" class="qe-sel"></td><td>${esc(r.number)}</td><td class="n" title="${esc(r.name)}">${esc(r.name)}</td>` +
