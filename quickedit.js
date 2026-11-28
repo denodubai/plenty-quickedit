@@ -87,9 +87,7 @@
   <button class="x" id="qe-close">✕</button>
   <div class="only-p chanrow" style="flex-basis:100%;display:flex;gap:6px;align-items:center">
    <span>Kanal:</span>
-   <button class="chan" data-ch="">Alle</button><button class="chan" data-ch="Amazon">Amazon</button><button class="chan" data-ch="Kaufland">Kaufland</button>
-   <button class="chan" data-ch="Woocommerce">Woocommerce</button><button class="chan" data-ch="eBay">eBay</button><button class="chan" data-ch="Otto">Otto</button><button class="chan" data-ch="Sonstige">Sonstige</button>
-   <span style="color:#9fb4bf;margin-left:8px">(mehrere anklickbar)</span>
+   <button class="chan" data-ch="Amazon">Amazon</button><button class="chan" data-ch="Kaufland">Kaufland</button><button class="chan" data-ch="eBay">eBay</button><button class="chan" data-ch="Otto">Otto</button><button class="chan" data-ch="Woocommerce">Woocommerce / Plenty</button>
   </div>
  </header>
  <div class="wrap"><table><thead></thead><tbody></tbody></table></div>
@@ -120,16 +118,19 @@
     // Standardpreis (kleinste ID = Plenty-Hauptpreis) zuerst, danach alphabetisch
     // Reihenfolge: je Kanal/Land Normalpreis → Sale/Sales → B2B; Woo: Woocommerce, Woocommerce Sale, Manuell Sales Preis
     const minId = Math.min(...PRICES.map(p => p.id));
-    const CH_ORDER = ['Sonstige', 'Amazon', 'Kaufland', 'Woocommerce', 'eBay', 'Otto'];
+    const CH_ORDER = ['Amazon', 'Kaufland', 'eBay', 'Otto', 'Woocommerce', 'Sonstige'];
+    const LAND = ['DE', 'FR', 'IT', 'ES', 'NL', 'BE', 'PL', 'SE', 'IE', 'UK', 'AT', 'CZ', 'SK'];
+    const landRank = b => { const m = b.match(/\b(DE|FR|IT|ES|NL|BE|PL|SE|IE|UK|AT|CZ|SK)\b/i); return m ? LAND.indexOf(m[1].toUpperCase()) : (/^(amz|kaufland|otto|ebay)$/i.test(b.trim()) ? -1 : 50); };
     PRICES.forEach(p => {
       const n = p.name; p.ch = channelOf(n);
       let base = n.replace(/\s+(sales?|b2b)$/i, '').trim(); let sub = /sales?$/i.test(n) ? 1 : /b2b$/i.test(n) ? 2 : 0;
       if (/^manuell sales/i.test(n)) { base = 'Woocommerce'; sub = 3; }
+      if (/plentyshop/i.test(n)) { base = 'Woocommerce'; sub = 4; }
       p.base = base; p.sub = sub;
     });
-    PRICES.sort((a, b) => (a.id === minId ? -1 : b.id === minId ? 1 :
-      (CH_ORDER.indexOf(a.ch) - CH_ORDER.indexOf(b.ch)) || a.base.localeCompare(b.base) || (a.sub - b.sub)));
-    let saved = null; try { saved = JSON.parse(localStorage.qeCols3 || 'null'); } catch (e) {}
+    PRICES.sort((a, b) => (CH_ORDER.indexOf(a.ch) - CH_ORDER.indexOf(b.ch)) || (landRank(a.base) - landRank(b.base)) ||
+      a.base.localeCompare(b.base) || (a.sub - b.sub));
+    let saved = null; try { saved = JSON.parse(localStorage.qeCols4 || 'null'); } catch (e) {}
     COLS = saved && saved.length ? PRICES.filter(p => saved.includes(p.id)).map(p => p.id) : PRICES.map(p => p.id);  // Standard: alle Preise
     info('Lade Varianten …');
     const vars = await pages('/rest/items/variations?itemsPerPage=250&with=variationSalesPrices,stock');
@@ -212,11 +213,11 @@
   /* ---------- Darstellung ---------- */
   function channelOf(n) {
     if (/^amz|amazon/i.test(n)) return 'Amazon'; if (/kaufland/i.test(n)) return 'Kaufland';
-    if (/woo|manuell sales/i.test(n)) return 'Woocommerce'; if (/ebay/i.test(n)) return 'eBay';
+    if (/woo|manuell sales|plentyshop/i.test(n)) return 'Woocommerce'; if (/ebay/i.test(n)) return 'eBay';
     if (/otto/i.test(n)) return 'Otto'; return 'Sonstige';
   }
-  let CHAN = new Set(); try { CHAN = new Set(JSON.parse(localStorage.qeChan || '[]')); } catch (e) {}
-  const visCols = () => CHAN.size ? COLS.filter(id => CHAN.has((PRICES.find(p => p.id === id) || {}).ch)) : COLS;
+  let CHAN = localStorage.qeChan1 || 'Amazon';
+  const visCols = () => COLS.filter(id => (PRICES.find(p => p.id === id) || {}).ch === CHAN);
   const priceName = id => (PRICES.find(p => p.id === id) || {}).name || id;
   function pairOf(id) {
     const n = priceName(id); const m = n.match(/^(.*?)\s+(sales?|angebot)$/i);
@@ -421,10 +422,9 @@
     const d = (e.clipboardData || window.clipboardData).getData('text'); if (/[^0-9,.\-\s€]/.test(d)) { e.preventDefault(); stat('⚠ Nur Zahlen erlaubt'); }
   }, true);
   // Kanal-Filter
-  function paintChan() { root.querySelectorAll('button.chan').forEach(b => b.classList.toggle('on', b.dataset.ch ? CHAN.has(b.dataset.ch) : CHAN.size === 0)); }
+  function paintChan() { root.querySelectorAll('button.chan').forEach(b => b.classList.toggle('on', b.dataset.ch === CHAN)); }
   root.querySelectorAll('button.chan').forEach(b => b.onclick = () => {
-    const c = b.dataset.ch; if (!c) CHAN.clear(); else if (CHAN.has(c)) CHAN.delete(c); else CHAN.add(c);
-    localStorage.qeChan = JSON.stringify([...CHAN]); paintChan(); buildBulkSelect(); render();
+    CHAN = b.dataset.ch; localStorage.qeChan1 = CHAN; paintChan(); buildBulkSelect(); render();
   });
   paintChan();
 
@@ -480,7 +480,7 @@
     d.querySelector('#qe-colok').onclick = () => {
       const chosen = [...d.querySelectorAll('input:checked')].map(i => +i.value);
       COLS = PRICES.filter(p => chosen.includes(p.id)).map(p => p.id);
-      localStorage.qeCols3 = JSON.stringify(COLS); d.remove(); buildBulkSelect(); render();
+      localStorage.qeCols4 = JSON.stringify(COLS); d.remove(); buildBulkSelect(); render();
     };
   };
 
